@@ -1,24 +1,59 @@
-/* 主框架布局 */
+/* 主框架布局：三行网格（顶栏 / 两栏工作区 / 状态栏）
+
+   为什么要换成网格而不是原来的「header + app-body」纵向 flex：
+   原结构里详情页和列表页是两个互斥视图，各有自己的 toolbar，切一次视图
+   就重排一次整屏。现在是 master–detail 两栏常驻，左栏不动、右栏换内容，
+   用户不会丢失"我在哪、列表长什么样"的上下文。 */
+
+/* ══════════════════════════════════════════════════════════════
+   外壳
+   ══════════════════════════════════════════════════════════════ */
 
 .app-shell {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: var(--h-header) minmax(0, 1fr) var(--h-statusbar);
     height: 100vh;
+    /* 移动端浏览器地址栏会吃掉 100vh，用 dvh 兜底 */
+    height: 100dvh;
+    overflow: hidden;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   顶栏：只放身份与两个全局动作
+
+   连接态、配额、版本号全部下移到状态栏——顶栏出现三样以上信息时，
+   每个都不再显眼。 */
+/* ══════════════════════════════════════════════════════════════ */
 
 .app-header {
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    height: 48px;
-    padding: 0 var(--space-4);
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-elev);
+    padding: 0 var(--space-5) 0 var(--space-6);
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
     flex-shrink: 0;
 }
 
+.app-brand {
+    font-family: var(--font-display);
+    font-size: var(--text-xl);
+    font-weight: 600;
+    letter-spacing: -.01em;
+    color: var(--text);
+    line-height: 1;
+    cursor: pointer;
+    /* 品牌字标不是控件，给个极淡的 hover 提示可点即可 */
+    transition: color var(--dur-fast) var(--ease);
+}
+
+.app-brand:hover {
+    color: var(--signal);
+}
+
+/* 兼容旧类名（verify-ui.ps1 断言 .app-title 的文本） */
 .app-title {
-    font-size: var(--text-lg);
+    font-size: var(--text-xl);
     font-weight: 600;
     margin: 0;
 }
@@ -27,20 +62,235 @@
     flex: 1;
 }
 
-.app-body {
-    flex: 1;
-    overflow: auto;
-    padding: var(--space-4);
+/* ══════════════════════════════════════════════════════════════
+   两栏工作区
+   ══════════════════════════════════════════════════════════════ */
+
+.app-split {
+    display: grid;
+    grid-template-columns: var(--w-sidebar) minmax(0, 1fr);
     min-height: 0;
+    overflow: hidden;
 }
 
-/* 列表页：工具栏 + 虚拟列表占满剩余高度，不用 app-body 的 padding */
-.app-body--flush {
-    padding: 0;
-    overflow: hidden;
+/* ── 左栏：条目台账 ─────────────────────────────────────── */
+
+.sidebar {
     display: flex;
     flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--line);
+    background: var(--bg);
+    overflow: hidden;
 }
+
+.sidebar-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.sidebar-search {
+    flex: 1;
+    min-width: 0;
+    height: var(--h-control-sm);
+    padding: 0 var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: var(--bg-sunken);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+    transition: border-color var(--dur-fast) var(--ease),
+                background-color var(--dur-fast) var(--ease);
+}
+
+.sidebar-search::placeholder {
+    color: var(--text-faint);
+}
+
+.sidebar-search:hover {
+    border-color: var(--line-strong);
+}
+
+.sidebar-search:focus {
+    outline: none;
+    border-color: var(--signal);
+    background: var(--bg-raised);
+}
+
+.sidebar-count {
+    font-family: var(--font-display);
+    font-size: var(--text-2xs);
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+/* ── 右栏：详情 / 设置 ───────────────────────────────────── */
+
+.content {
+    overflow-y: auto;
+    min-height: 0;
+    /* 底部留 --space-7 而不是 --space-6：最后一行内容如果紧贴状态栏，
+       会被状态栏的边框视觉切断，看起来像被裁掉了。 */
+    padding: var(--space-6) var(--space-7) var(--space-7);
+    /* 左对齐而不是居中：台账类界面让内容靠左，视线起点稳定 */
+    scroll-padding-top: var(--space-5);
+    scroll-padding-bottom: var(--space-7);
+}
+
+/* 内容度量：68ch 是**正文**的行宽上限，不是整页的宽度上限。
+   拿它当整页宽度会让规则列表挤在左半边、右侧空出几百像素。
+   结构区（标题、刻度、规则列表）用固定上限，只有长段落走 --measure。 */
+.content-inner {
+    max-width: var(--w-content);
+}
+
+.content-inner .prose,
+.content-inner .settings-section-desc,
+.content-inner .empty-state-hint,
+.content-inner .field-hint {
+    max-width: var(--measure);
+}
+
+/* 详情页标题区（替代原来的 toolbar） */
+.content-head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+}
+
+.content-head-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.content-title {
+    /* 默认走 --font-ui：页面标题里大量是中文（"设置""1 个仓库"），
+       而 Bahnschrift 不含中文字形，挂上去会回落雅黑并在字重/基线上露破绽。
+       纯 ASCII 的标题（owner/repo）显式加 .content-title--ascii 换到 display 字体。 */
+    font-family: var(--font-ui);
+    font-size: var(--text-2xl);
+    font-weight: 600;
+    line-height: var(--leading-tight);
+    letter-spacing: -.01em;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.content-title--ascii {
+    font-family: var(--font-display);
+    letter-spacing: -.02em;
+}
+
+.content-subtitle {
+    margin-top: var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-dim);
+}
+
+.content-head-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   状态栏：原来散落在顶栏的连接点、配额、版本号收到这里
+
+   28px 高、等宽数字、无边框（只有上分隔线）。信息在但不抢戏。
+   ══════════════════════════════════════════════════════════════ */
+
+.app-statusbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    height: var(--h-statusbar);
+    padding: 0 var(--space-5) 0 var(--space-6);
+    border-top: 1px solid var(--line);
+    background: var(--bg-sunken);
+    font-size: var(--text-2xs);
+    color: var(--text-faint);
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.statusbar-spacer {
+    flex: 1;
+}
+
+.statusbar-item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+}
+
+.statusbar-num {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 连接状态点：颜色 + 形状双重编码（实心 = 连着，空心 = 断/重连），
+   只有颜色的话色盲用户分不出"已连接"和"已断开"。 */
+.statusbar-dot {
+    width: var(--size-dot);
+    height: var(--size-dot);
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--live);
+    box-shadow: 0 0 0 3px var(--live-soft);
+}
+
+.statusbar-dot--live {
+    background: var(--live);
+    box-shadow: 0 0 0 3px var(--live-soft);
+}
+
+.statusbar-dot--warn {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--signal);
+}
+
+.statusbar-dot--error {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--danger);
+}
+
+/* 兼容旧断言：ConnectionDot 迁移后不再使用，但保留类名映射 */
+.status-dot {
+    display: inline-block;
+    width: var(--size-dot);
+    height: var(--size-dot);
+    border-radius: 50%;
+    background: var(--text-faint);
+    flex-shrink: 0;
+}
+
+.status-dot--ok {
+    background: var(--live);
+    box-shadow: 0 0 0 3px var(--live-soft);
+}
+
+.status-dot--warn {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--signal);
+}
+
+.status-dot--error {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--danger);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   空状态
+   ══════════════════════════════════════════════════════════════ */
 
 .empty-state {
     display: flex;
@@ -48,8 +298,8 @@
     align-items: center;
     justify-content: center;
     gap: var(--space-3);
-    height: 100%;
-    min-height: 240px;
+    padding: var(--space-8) var(--space-5);
+    min-height: var(--min-empty);
     color: var(--text-dim);
     text-align: center;
 }
@@ -57,75 +307,159 @@
 .empty-state-title {
     font-size: var(--text-lg);
     color: var(--text);
-    margin: 0;
+    font-weight: 500;
+    line-height: var(--leading-snug);
 }
 
-.status-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--text-faint);
-    flex-shrink: 0;
+.empty-state-hint {
+    font-size: var(--text-sm);
+    color: var(--text-dim);
+    max-width: 42ch;
+    line-height: var(--leading-normal);
 }
 
-.status-dot--ok {
-    background: var(--success);
+/* 左栏的空状态更紧凑 */
+.sidebar .empty-state {
+    padding: var(--space-6) var(--space-4);
+    min-height: 0;
 }
 
-.status-dot--warn {
-    background: var(--warn);
+/* ══════════════════════════════════════════════════════════════
+   详情页内容区
+
+   分节之间用分隔线，不用卡片：卡片一多，界面就退化成「一堆同款方块」。
+   ══════════════════════════════════════════════════════════════ */
+
+.section {
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--line);
+    margin-top: var(--space-5);
 }
 
-.status-dot--error {
-    background: var(--danger);
+.section:first-child {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
 }
+
+.section-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.section-title {
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--text);
+    line-height: var(--leading-snug);
+}
+
+.section-meta {
+    font-size: var(--text-xs);
+    color: var(--text-faint);
+}
+
+/* 兼容旧类名（DetailView 用 detail-section） */
+.detail-section {
+    padding-top: var(--space-5);
+    border-top: 1px solid var(--line);
+    margin-top: var(--space-5);
+}
+
+.detail-section:first-of-type {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+.detail-section-title {
+    font-size: var(--text-md);
+    color: var(--text);
+    font-weight: 600;
+    margin: 0 0 var(--space-4);
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+}
+
+.detail-body {
+    /* 旧版这里是 padding: 16px + max-width 880px 的整块留白。
+       现在 padding 由 .content 提供，这里只负责宽度。 */
+    max-width: var(--measure);
+}
+
+/* ── 设置页 ─────────────────────────────────────────────── */
+
+.settings-body {
+    padding: 0;
+    max-width: var(--measure);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   辅助类
+   ══════════════════════════════════════════════════════════════ */
 
 .muted {
     color: var(--text-dim);
     font-size: var(--text-sm);
 }
 
-/* 列表表头：列宽必须与 .entry-row 的 grid 完全一致，否则错位 */
-.list-header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 120px 140px 200px;
-    gap: var(--space-3);
-    align-items: center;
-    height: 32px;
-    padding: 0 var(--space-3);
-    border-bottom: 1px solid var(--border);
-    font-size: var(--text-xs);
-    color: var(--text-faint);
-    flex-shrink: 0;
-    background: var(--bg);
+/* ══════════════════════════════════════════════════════════════
+   响应式：这是桌面工具，不做手机适配，但窄窗口要能读
+
+   两级降级：
+     860px  左栏收窄
+     760px  单列叠放，左栏限高 38vh
+   行高在两个断点下都不变——虚拟滚动按固定行高算位置，行高一变就错位。
+   ══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 1100px) {
+    .content {
+        padding: var(--space-5) var(--space-6);
+    }
 }
 
-.list-header-actions {
-    text-align: right;
+@media (max-width: 860px) {
+    :root {
+        --w-sidebar: 280px;  /* 窄窗专用，与 --bp-mid 同步 */
+    }
+
+    .content {
+        padding: var(--space-5);
+    }
+
+    .app-header {
+        padding: 0 var(--space-4);
+    }
+
+    .app-statusbar {
+        padding: 0 var(--space-4);
+    }
 }
 
-/* 详情页：内容区留白 */
-.detail-body {
-    padding: var(--space-4);
-    max-width: 880px;
-}
+@media (max-width: 760px) {
+    .app-split {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 38vh) minmax(0, 1fr);
+    }
 
-/* 设置页 */
-.settings-body {
-    padding: var(--space-4);
-    max-width: 640px;
-}
+    .sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+    }
 
-/* 连接状态条：SSE 断开时显示 */
-.conn-banner {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-4);
-    background: color-mix(in oklch, var(--warn) 15%, transparent);
-    color: var(--warn);
-    font-size: var(--text-sm);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
+    .content {
+        padding: var(--space-4);
+    }
+
+    .content-title {
+        font-size: var(--text-xl);
+    }
+
+    /* 窄窗口下状态栏只留连接点和配额，其余靠 title 属性 */
+    .statusbar-item--optional {
+        display: none;
+    }
 }

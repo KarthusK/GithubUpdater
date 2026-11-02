@@ -4,7 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="api-token" content="{{API_TOKEN}}">
+    <meta name="color-scheme" content="dark light">
     <title>GithubUpdater</title>
+
+    <!--
+      主题引导必须同步、无延迟地跑在样式之前。
+      它是普通脚本（非 module、非 defer），否则会先渲染一帧深色再跳浅色。
+    -->
+    <script src="/assets/js/theme-boot.js"></script>
 
     <link rel="stylesheet" href="/assets/css/base.css">
     <link rel="stylesheet" href="/assets/css/layout.css">

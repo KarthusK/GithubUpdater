@@ -14,6 +14,7 @@ import { Button } from './Button.js';
  */
 export function Dialog({ title, children, onClose, actions = [] }) {
     const backdropRef = useRef(null);
+    const panelRef = useRef(null);
 
     useEffect(() => {
         // Esc 关闭
@@ -21,7 +22,17 @@ export function Dialog({ title, children, onClose, actions = [] }) {
             if (e.key === 'Escape') onClose();
         };
         document.addEventListener('keydown', onKey);
-        return () => document.removeEventListener('keydown', onKey);
+
+        // 打开时把焦点移到弹窗里，否则 Tab 会跑到背后的页面上
+        const prev = document.activeElement;
+        if (panelRef.current) {
+            panelRef.current.focus();
+        }
+
+        return () => {
+            document.removeEventListener('keydown', onKey);
+            if (prev instanceof HTMLElement) prev.focus();
+        };
     }, [onClose]);
 
     // 点遮罩关闭，点内容不关（否则用户选文本时会误关）
@@ -31,7 +42,14 @@ export function Dialog({ title, children, onClose, actions = [] }) {
 
     return html`
         <div class="dialog-backdrop" ref=${backdropRef} onClick=${onBackdropClick}>
-            <div class="dialog" role="dialog" aria-modal="true" aria-label=${title}>
+            <div
+                class="dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label=${title}
+                tabindex="-1"
+                ref=${panelRef}
+            >
                 <div class="dialog-header">${title}</div>
                 <div class="dialog-body">${children}</div>
                 <div class="dialog-footer">

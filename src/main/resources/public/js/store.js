@@ -8,6 +8,8 @@
  * 进度不走这里，见 progress.js。那是高频局部更新，走全局广播会拖垮列表。
  */
 
+import { getThemePref } from './theme.js';
+
 export const store = {
     /** @type {Array<any>} 条目列表 */
     entries: [],
@@ -22,14 +24,24 @@ export const store = {
     /** @type {any} 最近一次错误，用于顶部提示 */
     lastError: null,
 
-    /** 界面状态（纯前端，不来自服务端） */
+    /**
+     * 界面状态（纯前端，不来自服务端）。
+     *
+     * 与旧版的区别：不再是「list / detail / settings 三个互斥页面」，
+     * 而是「左栏常驻条目 + 右栏切换内容」。所以 view 只有两档，
+     * 且 detail 是通过 selectedEntryId 是否为空来表达的。
+     */
     ui: {
-        /** list | detail | settings */
-        view: 'list',
+        /** entries | settings */
+        view: 'entries',
         /** @type {number|null} */
         selectedEntryId: null,
         /** 向导是否打开 */
         wizardOpen: false,
+        /** 左栏过滤串（纯前端，不持久化） */
+        filter: '',
+        /** 主题偏好：system | light | dark */
+        theme: getThemePref(),
     },
 
     /** @type {Set<Function>} */
@@ -129,16 +141,53 @@ export const store = {
 
     // ── 界面状态 ──────────────────────────────────────
 
-    /** @param {string} view @param {number|null} [entryId] */
-    navigate(view, entryId = null) {
-        this.ui.view = view;
+    /**
+     * 在右栏打开某条目的详情。
+     * 找不到该条目时（例如刚被删除）退回条目总览。
+     * @param {number|null} entryId
+     */
+    openEntry(entryId) {
+        this.ui.view = 'entries';
         this.ui.selectedEntryId = entryId;
+        this.emit();
+    },
+
+    /** 关闭详情，右栏回到总览。左栏选中态同时清掉。 */
+    closeEntry() {
+        this.ui.view = 'entries';
+        this.ui.selectedEntryId = null;
+        this.emit();
+    },
+
+    /** 右栏切到设置。左栏保持原样，选中态保留。 */
+    openSettings() {
+        this.ui.view = 'settings';
+        this.emit();
+    },
+
+    /** 左下角「返回」用：先回列表，再决定是否清选中。 */
+    backToEntries() {
+        this.ui.view = 'entries';
         this.emit();
     },
 
     /** @param {boolean} open */
     setWizardOpen(open) {
         this.ui.wizardOpen = open;
+        this.emit();
+    },
+
+    /** @param {string} text 左栏过滤串 */
+    setFilter(text) {
+        if (this.ui.filter === text) return;
+        this.ui.filter = text;
+        this.emit();
+    },
+
+    /** @param {string} pref system | light | dark */
+    setThemePref(pref) {
+        if (this.ui.theme === pref) return;
+        this.ui.theme = pref;
         this.emit();
     },
 };
@@ -153,5 +202,27 @@ export const selectors = {
     view: s => s.ui.view,
     selectedEntryId: s => s.ui.selectedEntryId,
     wizardOpen: s => s.ui.wizardOpen,
+    filter: s => s.ui.filter,
+    theme: s => s.ui.theme,
     lastError: s => s.lastError,
 };
+
+/**
+ * 按过滤串筛条目。
+ *
+ * 纯前端过滤：条目上限按上百条设计，`includes` 在这个量级毫无压力，
+ * 不值得为它加索引或走后端。
+ *
+ * @param {Array<any>} entries
+ * @param {string} filter
+ * @returns {Array<any>}
+ */
+export function filterEntries(entries, filter) {
+    const q = (filter || '').trim().toLowerCase();
+    if (!q) return entries;
+    return entries.filter(e => {
+        const name = (e.displayName || '').toLowerCase();
+        const full = (e.fullName || '').toLowerCase();
+        return name.includes(q) || full.includes(q);
+    });
+}

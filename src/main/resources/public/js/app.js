@@ -1,26 +1,28 @@
 // @ts-check
-/** 根组件：视图切换、顶栏、全局副作用（SSE + 初始数据加载）。 */
+/** 根组件：外壳装配、视图切换、全局副作用（SSE + 初始数据加载 + 主题）。 */
 
 import { html } from 'htm/preact';
-import { useEffect, useCallback } from 'preact/hooks';
+import { useEffect, useCallback, useRef } from 'preact/hooks';
 import { useStore } from './hooks/useStore.js';
 import { useSse } from './hooks/useSse.js';
 import { selectors, store } from './store.js';
 import { api } from './api.js';
-import { toastError } from './toast.js';
-import { formatQuota } from './format.js';
+import { toast, toastError } from './toast.js';
+import { setThemePref } from './theme.js';
 import { ListView } from './views/ListView.js';
 import { DetailView } from './views/DetailView.js';
 import { WizardView } from './views/WizardView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { StatusBar } from './components/StatusBar.js';
 import { ToastContainer } from './components/Toast.js';
+import { ConfirmHost } from './components/confirm.js';
 import { Button } from './components/Button.js';
 
 export function App() {
     const view = useStore(selectors.view);
-    const quota = useStore(selectors.quota);
     const connectionStatus = useStore(selectors.connectionStatus);
     const wizardOpen = useStore(selectors.wizardOpen);
+    const theme = useStore(selectors.theme);
 
     useSse();
 
@@ -29,67 +31,88 @@ export function App() {
         (async () => {
             try {
                 const [entries, q] = await Promise.all([api.listEntries(), api.quota()]);
-                store.setEntries(entries.entries || []);
+                const list = entries.entries || [];
+                store.setEntries(list);
                 store.setQuota(q);
+
+                // 打开面板的第一眼就该是"最近在意的那个仓库有没有落后"。
+                // 停在总览上等于让用户多点一次，而这次点击不提供任何信息。
+                // 只在确实没有选中项时自动选，避免覆盖用户的选择。
+                if (list.length > 0 && store.ui.view === 'entries' && store.ui.selectedEntryId == null) {
+                    store.openEntry(list[0].id);
+                }
             } catch (e) {
                 toastError(e);
             }
         })();
     }, []);
 
-    const onOpenSettings = useCallback(() => store.navigate('settings'), []);
-    const onBackToList = useCallback(() => store.navigate('list'), []);
+    // 主题：store 是真相源，写到 <html> 与 localStorage
+    useEffect(() => {
+        setThemePref(theme);
+    }, [theme]);
+
+    useReconnectNotice(connectionStatus);
+
+    const onOpenSettings = useCallback(() => store.openSettings(), []);
+    const onOpenWizard = useCallback(() => store.setWizardOpen(true), []);
+    // 点字标 = 回到条目总览（清选中、退出设置）
+    const onHome = useCallback(() => store.closeEntry(), []);
 
     return html`
         <div class="app-shell">
             <header class="app-header">
-                <h1 class="app-title" onClick=${onBackToList} style="cursor:pointer">
+                <span class="app-brand app-title" onClick=${onHome} title="回到条目总览">
                     GithubUpdater
-                </h1>
+                </span>
                 <div class="app-header-spacer"></div>
-
-                <${ConnectionDot} status=${connectionStatus} />
-
-                ${quota && html`
-                    <span class="text-xs text-dim num" title=${quota.authenticated ? '已认证' : '匿名访问'}>
-                        ${formatQuota(quota)}
-                    </span>
-                `}
-
-                <${Button} variant="ghost" small onClick=${onOpenSettings}>设置<//>
+                <${Button} variant="primary" onClick=${onOpenWizard}>添加仓库<//>
+                <${Button}
+                    variant="icon"
+                    title="设置"
+                    onClick=${onOpenSettings}
+                >⚙<//>
             </header>
 
-            ${connectionStatus !== 'open' && html`
-                <div class="conn-banner">
-                    <span class="status-dot status-dot--warn"></span>
-                    <span>
-                        ${connectionStatus === 'connecting'
-                            ? '正在连接事件流…'
-                            : '事件流已断开，进度不会实时更新。正在自动重连…'}
-                    </span>
-                </div>
-            `}
-
-            <div class=${view === 'list' ? 'app-body app-body--flush' : 'app-body'}>
-                ${view === 'list' && html`<${ListView} />`}
-                ${view === 'detail' && html`<${DetailView} />`}
-                ${view === 'settings' && html`<${SettingsView} />`}
+            <div class="app-split">
+                <${ListView} />
+                <main class="content">
+                    ${view === 'settings'
+                        ? html`<${SettingsView} />`
+                        : html`<${DetailView} />`}
+                </main>
             </div>
 
+            <${StatusBar} />
+
             ${wizardOpen && html`<${WizardView} />`}
+            <${ConfirmHost} />
             <${ToastContainer} />
         </div>
     `;
 }
 
-function ConnectionDot({ status }) {
-    const cls = status === 'open'
-        ? 'status-dot status-dot--ok'
-        : status === 'error'
-            ? 'status-dot status-dot--error'
-            : 'status-dot status-dot--warn';
-    const title = status === 'open' ? '事件流已连接'
-        : status === 'connecting' ? '正在连接'
-        : '事件流已断开';
-    return html`<span class=${cls} title=${title}></span>`;
+/**
+ * 事件流断开时提示**一次**。
+ *
+ * 原来是用一条常驻的横幅，但它占掉一整行高度且长期挂着——连接正常时
+ * 是纯噪音，断开时又太晚（用户已经在看别处）。改成：状态栏常驻真实状态，
+ * 首次断开时补一条 toast。
+ *
+ * @param {string} status
+ */
+function useReconnectNotice(status) {
+    const notifiedRef = useRef(false);
+
+    useEffect(() => {
+        if (status === 'open') {
+            notifiedRef.current = false;
+            return;
+        }
+        if (status !== 'error' && status !== 'closed') return;
+        if (notifiedRef.current) return;
+
+        notifiedRef.current = true;
+        toast('与后台的事件流断开，进度不会实时更新。正在自动重连…', 'warn');
+    }, [status]);
 }

@@ -1,74 +1,236 @@
 /* 设计令牌 —— 所有样式必须走这些变量，不写字面量。
-   完整约定见 docs/05-前端设计.md 第 9 节。 */
+   完整约定见 docs/05-前端设计.md 第 9 节。
+
+   本文件是全项目唯一允许出现颜色/尺寸字面量的地方。新增样式时如果
+   发现需要写 `padding: 13px` 或 `color: #333`，说明令牌体系缺一项，
+   应该在这里补令牌，而不是在组件里破例。 */
+
+/* ══════════════════════════════════════════════════════════════
+   令牌：与主题无关的部分（间距、字号、圆角、尺寸、动效、字体）
+   ══════════════════════════════════════════════════════════════ */
 
 :root {
-    /* 间距：4 的倍数，只用这 6 档 */
+    /* ── 间距：8 档，全部 4 的倍数 ─────────────────────────── */
     --space-1: 4px;
     --space-2: 8px;
     --space-3: 12px;
     --space-4: 16px;
     --space-5: 24px;
     --space-6: 32px;
+    --space-7: 48px;
+    --space-8: 64px;
 
-    /* 字号：5 档 */
+    /* ── 字号：7 档。相邻档至少差 1px，且 17/22/28 用来建立
+          「条目名 → 区块标题 → 仓库标题」三级层次 ──────────── */
+    --text-2xs: 11px;
     --text-xs: 12px;
     --text-sm: 13px;
     --text-md: 14px;
-    --text-lg: 16px;
-    --text-xl: 20px;
+    --text-lg: 17px;
+    --text-xl: 22px;
+    --text-2xl: 28px;
 
-    --leading-tight: 1.3;
-    --leading-normal: 1.6;
+    /* ── 行高：中文正文要比西文松 ─────────────────────────── */
+    --leading-tight: 1.25;
+    --leading-snug: 1.45;
+    --leading-normal: 1.65;
 
-    /* 圆角 */
+    /* ── 圆角：分级而不是一刀切。控件 8、容器 12、内嵌 4、刻线 2 ── */
+    --radius-xs: 2px;
     --radius-sm: 4px;
-    --radius-md: 6px;
-    --radius-lg: 10px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
 
-    /* 颜色：暗色为默认 */
-    --bg: #16181d;
-    --bg-elev: #1e2128;
-    --bg-hover: #242832;
-    --bg-active: #2c313d;
-    --border: #2a2f38;
-    --border-strong: #3a4150;
+    /* ── 尺寸：JS 也要读的布局常量（行高必须从这里取，见 ListView） ── */
+    --w-sidebar: 344px;
+    --w-rail: 2px;           /* 条目行左侧状态刻线宽度 */
+    --w-sheet: 560px;        /* 右侧抽屉宽度 */
+    --h-header: 56px;
+    --h-statusbar: 28px;
+    --h-row: 64px;
+    --h-control: 32px;
+    --h-control-sm: 26px;
+    --measure: 68ch;         /* 正文最大行宽 */
+    --w-content: 940px;      /* 右栏内容区最大宽度（结构区，不是正文） */
 
-    --text: #e4e6eb;
-    --text-dim: #8b919c;
-    --text-faint: #5c6370;
+    /* 小元件尺寸：这些数字以前散落在组件里，集中在这里才好统一调 */
+    --size-dot: 6px;         /* 状态点 */
+    --size-dot-lg: 7px;      /* 版本刻度点 */
+    --size-rail-h: 1px;      /* 刻度尺线宽 */
+    --size-marker: 9px;      /* 向导步骤点 */
+    --size-indicator: 5px;   /* 徽章色点 */
+    --size-check: 16px;      /* 复选框/单选钮边长 */
+    --h-progress: 4px;
+    --h-progress-lg: 6px;
 
-    --accent: #4a9eff;
-    --accent-hover: #6bb0ff;
-    --success: #3fb950;
-    --warn: #d29922;
-    --danger: #f85149;
+    /* 控件尺寸 */
+    --w-input-num: 96px;     /* 设置行里的数字输入 */
+    --w-input-wide: 320px;
+    --h-dialog-max: 80vh;
+    --h-asset-list: 340px;
+    --w-menu-min: 176px;
+    --w-toast-min: 240px;
+    --w-toast-max: 400px;
+    --w-dialog: 520px;
+    --min-empty: 240px;
 
-    /* 层叠与动效 */
-    --shadow-md: 0 2px 8px rgba(0, 0, 0, .24);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, .32);
-    --duration: 120ms;
-    --ease: cubic-bezier(.2, 0, .2, 1);
+    /* 勾选标记的几何：勾是一条 2px 描边的旋转矩形，
+       这几个值是它画对的前提，和控件边长绑定在一起 */
+    --check-offset: 4px;
+    --mark-w: 4px;
+    --mark-h: 8px;
+    --mark-ring: 2px;
+    --mark-inset: 3px;
+    /* 步骤轨竖线相对点的偏移：点半径 + 与文字间距的一半 */
+    --rail-node-offset: 13px;
 
-    /* 字体：中英文显式配对 */
-    --font-ui: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-    --font-mono: "Cascadia Code", "Consolas", "Microsoft YaHei UI", monospace;
+    /* 断点：CSS 自定义属性不能用在 @media 里，所以这几个值
+       同时写在下面的媒体查询中，改的时候必须两处一起改。 */
+    --bp-wide: 1100px;
+    --bp-mid: 860px;
+    --bp-narrow: 760px;
+
+    /* ── 层叠 ─────────────────────────────────────────────── */
+    --z-sheet: 60;
+    --z-dialog: 80;
+    --z-toast: 90;
+
+    /* ── 动效 ─────────────────────────────────────────────── */
+    --dur-fast: 90ms;
+    --dur-base: 160ms;
+    --dur-slow: 240ms;
+    --ease: cubic-bezier(.2, .7, .3, 1);
+    --ease-out: cubic-bezier(0, 0, .2, 1);
+
+    /* ── 字体：三档，全部本机可用，不发任何网络请求 ────────────
+       Bahnschrift 是 Windows 10+ 自带的 DIN 风格可变字体，只用于
+       **纯 ASCII** 元素（品牌字标、版本号、tag、配额、计数）。
+       它不含中文字形，挂到中文上会回落雅黑并在基线上露破绽。 */
+    --font-display: Bahnschrift, "Segoe UI Variable Display", "Segoe UI", sans-serif;
+    --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   令牌：颜色（深色为默认）
+
+   语义色是双通道的，不是"一个强调色配几个状态"：
+     --signal  琥珀 = 需要人处理（有新版本、待应用、被占用）
+     --live    青   = 系统在跑/已经好了（已连接、下载中、已完成）
+   这两种状态在「版本台账」这个隐喻里是不同的科目，所以给不同色相。
+   成功刻意不用绿色——绿色的庆祝感和这个工具的性格不符。
+   ══════════════════════════════════════════════════════════════ */
+
+:root {
+    --bg: #101514;
+    --bg-raised: #161c1a;
+    --bg-sunken: #0b0f0e;
+    --bg-hover: #1d2523;
+    --bg-selected: #232d2a;
+
+    --line: #232c2a;
+    --line-strong: #34413d;
+
+    --text: #e6eae7;
+    --text-dim: #94a19b;
+    --text-faint: #7b8882;
+
+    --signal: #e0a458;
+    --live: #46b3a0;
+    --danger: #e0705d;
+
+    --on-signal: #181005;
+    --on-live: #04120f;
+    --on-danger: #1a0805;
+
+    /* 由主色派生，浅色/深色都不用各写一遍 */
+    --signal-soft: color-mix(in oklch, var(--signal) 18%, transparent);
+    --live-soft: color-mix(in oklch, var(--live) 18%, transparent);
+    --danger-soft: color-mix(in oklch, var(--danger) 18%, transparent);
+
+    --focus: var(--signal);
+
+    /* 遮罩：抽屉/对话框打开时压暗背景。
+       不能用 --bg 派生——浅色主题下 --bg 本来就是亮的，混出来的遮罩是白的，
+       背景不会后退，抽屉看起来像浮在空中。遮罩必须是暗的。 */
+    --scrim: rgb(0 0 0 / .55);
+
+    /* 阴影：深色下用大模糊 + 低透明，不用 rgba(0,0,0,.1) 的默认灰影 */
+    --shadow-sheet: 0 24px 64px -24px rgb(0 0 0 / .72), 0 0 0 1px var(--line-strong);
+    --shadow-dialog: 0 32px 80px -32px rgb(0 0 0 / .8), 0 0 0 1px var(--line-strong);
+    --shadow-pop: 0 16px 40px -16px rgb(0 0 0 / .8), 0 0 0 1px var(--line-strong);
+}
+
+/* 浅色：两处引用同一份值。自定义属性无法批量赋值，所以只能写两遍，
+   改一处必须同步改另一处（verify-ui.ps1 里有主题背景色的断言兜底）。 */
 
 @media (prefers-color-scheme: light) {
-    :root {
-        --bg: #ffffff;
-        --bg-elev: #f6f8fa;
-        --bg-hover: #eef1f4;
-        --bg-active: #e4e8ec;
-        --border: #d0d7de;
-        --border-strong: #afb8c1;
-        --text: #1f2328;
-        --text-dim: #656d76;
-        --text-faint: #8c959f;
-        --shadow-md: 0 2px 8px rgba(140, 149, 159, .16);
-        --shadow-lg: 0 8px 24px rgba(140, 149, 159, .24);
+    :root:not([data-theme]) {
+        --bg: #f2f3f0;
+        --bg-raised: #fbfbf9;
+        --bg-sunken: #e8eae6;
+        --bg-hover: #e9ebe7;
+        --bg-selected: #dfe4dc;
+
+        --line: #d6dad3;
+        --line-strong: #b9c0b7;
+
+        --text: #161a17;
+        --text-dim: #59635c;
+        --text-faint: #636e65;
+
+        --signal: #8f5c1b;
+        --live: #0f7a6c;
+        --danger: #a63a2a;
+
+        --on-signal: #fff8ee;
+        --on-live: #f2fffb;
+        --on-danger: #fff5f2;
+
+        /* 浅色主题下背景本来就亮，遮罩要更重才能让抽屉退后 */
+        --scrim: rgb(24 30 26 / .38);
+
+        --shadow-sheet: 0 24px 64px -24px rgb(28 36 30 / .22), 0 0 0 1px var(--line-strong);
+        --shadow-dialog: 0 32px 80px -32px rgb(28 36 30 / .28), 0 0 0 1px var(--line-strong);
+        --shadow-pop: 0 16px 40px -16px rgb(28 36 30 / .24), 0 0 0 1px var(--line-strong);
     }
 }
+
+:root[data-theme="light"] {
+    --bg: #f2f3f0;
+    --bg-raised: #fbfbf9;
+    --bg-sunken: #e8eae6;
+    --bg-hover: #e9ebe7;
+    --bg-selected: #dfe4dc;
+
+    --line: #d6dad3;
+    --line-strong: #b9c0b7;
+
+    --text: #161a17;
+    --text-dim: #59635c;
+    --text-faint: #636e65;
+
+    --signal: #8f5c1b;
+    --live: #0f7a6c;
+    --danger: #a63a2a;
+
+    --on-signal: #fff8ee;
+    --on-live: #f2fffb;
+    --on-danger: #fff5f2;
+
+    --scrim: rgb(24 30 26 / .38);
+
+    --shadow-sheet: 0 24px 64px -24px rgb(28 36 30 / .22), 0 0 0 1px var(--line-strong);
+    --shadow-dialog: 0 32px 80px -32px rgb(28 36 30 / .28), 0 0 0 1px var(--line-strong);
+    --shadow-pop: 0 16px 40px -16px rgb(28 36 30 / .24), 0 0 0 1px var(--line-strong);
+}
+
+/* data-theme="dark" 不需要单独声明：上面的 :root 默认值就是深色，
+   且 @media 块用 :not([data-theme]) 排除掉显式指定了主题的根元素。 */
+
+/* ══════════════════════════════════════════════════════════════
+   重置
+   ══════════════════════════════════════════════════════════════ */
 
 *,
 *::before,
@@ -90,6 +252,52 @@ body {
     font-size: var(--text-md);
     line-height: var(--leading-normal);
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* 主题切换时整体过渡，避免"闪一下" */
+    transition: background-color var(--dur-base) var(--ease),
+                color var(--dur-base) var(--ease);
+}
+
+h1, h2, h3, h4, p {
+    margin: 0;
+}
+
+code,
+kbd {
+    font-family: var(--font-mono);
+    font-size: .92em;
+}
+
+/* 原生滚动条在深色下是亮灰的，是"网页套壳"的强信号之一 */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-faint);
+    background-clip: padding-box;
+}
+
+::selection {
+    background: var(--signal-soft);
+    color: var(--text);
 }
 
 /* 数字等宽，进度百分比和文件大小不会跳动 */
@@ -98,7 +306,7 @@ body {
 }
 
 a {
-    color: var(--accent);
+    color: var(--live);
     text-decoration: none;
 }
 
@@ -106,7 +314,25 @@ a:hover {
     text-decoration: underline;
 }
 
+/* 键盘导航才显示焦点环，鼠标点击不显示 */
 :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--focus);
     outline-offset: 2px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   动效偏好：全局关闭过渡与动画
+
+   这是无障碍硬要求，不是可选优化。放在最后以便覆盖前面的声明。
+   ══════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+        scroll-behavior: auto !important;
+    }
 }

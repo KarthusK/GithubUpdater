@@ -17,10 +17,17 @@ export function ToastContainer() {
     if (items.length === 0) return null;
 
     return html`
-        <div class="toast-container">
+        <div class="toast-container" role="status" aria-live="polite">
             ${items.map(t => html`
-                <div key=${t.id} class=${`toast toast--${t.type}`} onClick=${() => dismiss(t.id)}>
-                    <span class="grow">${t.text}</span>
+                <div key=${t.id} class=${`toast toast--${t.type}`}>
+                    <span class="toast-text">${t.text}</span>
+                    <button
+                        type="button"
+                        class="toast-close"
+                        title="关闭"
+                        aria-label="关闭提示"
+                        onClick=${() => dismiss(t.id)}
+                    >×</button>
                 </div>
             `)}
         </div>
