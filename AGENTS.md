@@ -57,11 +57,15 @@ mvn test                            # 跑全部单元测试（当前 138 个）
 mvn test -Dtest=AssetMatcherTest    # 跑单个测试类
 
 powershell build/run-dev.ps1        # 启动 daemon（run.ps1 用等价参数，二选一）
-powershell build/verify-ui.ps1      # CDP 端到端验证前端（需先启动 Chrome --remote-debugging-port=9222）
-powershell build/jlink.ps1          # jlink 裁剪 JRE → build/runtime
-powershell build/package.ps1        # jpackage app-image → build/out/GithubUpdater/
-powershell build/package.ps1 -Zip   # 追加生成发布用 zip
+powershell build/run-verify-ui.ps1  # CDP 端到端验证前端：自己起独立 headless Chrome，跑完自动清理
+powershell build/probe-flex.ps1      # 窄窗溢出 / reduced-motion / 配色对比度
+powershell build/jlink.ps1           # jlink 裁剪 JRE → build/runtime
+powershell build/package.ps1         # jpackage app-image → build/out/GithubUpdater/
+powershell build/package.ps1 -Zip    # 追加生成发布用 zip
 ```
+
+**注意 `verify-ui.ps1` 不直接跑**：它需要 `-DebuggerUrl` 参数（一个已经连好的 CDP WebSocket 地址），
+手工传很容易连到错误的页面。用 `run-verify-ui.ps1`，它会起一个独立实例并自动收尾。
 
 **启动后如何找到面板地址**：优先读 `data/runtime.json`（`url` 字段），这是唯一真相源。
 日志里也会打印 `服务已启动：http://127.0.0.1:<端口>`；**双击托盘图标**打开面板，右键只有一个 `Exit`。
@@ -73,9 +77,10 @@ powershell build/package.ps1 -Zip   # 追加生成发布用 zip
 2. `mvn -DskipTests package` 成功，产出 `target/github-updater.jar`
 3. 启动后 `GET /` 返回 200、页面内 `<meta name="api-token">` 有值
 4. 带 token 请求 `/api/health` 返回 200；**不带 token 返回 401**；**伪造 `Host: evil.com` 返回 403**
-5. **前端**：用 `build/verify-ui.ps1` 走 CDP，断言四页渲染 + SSE 连接状态
-6. **SSE 长连接**：`curl` 或 Java HttpClient 连 `/api/events`，确认 30 秒后仍未 EOF 且收到 `: keepalive`
-7. 打包后 `build/out/GithubUpdater/GithubUpdater.exe` 能启动
+5. **前端**：用 `build/run-verify-ui.ps1` 走 CDP，断言外壳/两栏/状态栏 + 版本刻度 + 详情 + 设置 + 主题切换 + 向导 + 0 页面错误
+6. **前端弹性**：用 `build/probe-flex.ps1` 断言 1024/1280/1600 三档无横向溢出、reduced-motion 生效、两套主题对比度达标
+7. **SSE 长连接**：`curl` 或 Java HttpClient 连 `/api/events`，确认 30 秒后仍未 EOF 且收到 `: keepalive`
+8. 打包后 `build/out/GithubUpdater/GithubUpdater.exe` 能启动
 
 ## 必须注意的坑
 
@@ -129,6 +134,28 @@ powershell build/package.ps1 -Zip   # 追加生成发布用 zip
   ```
 - **`-jar` 之前不能放程序参数**：`java -Xmx40m ... --minimized -jar app.jar` 会报 `Unrecognized option: --minimized`。程序参数必须在 jar 路径之后：`java @jvmArgs -jar $jar @appArgs`。
 - **不要用 `.bat` 做带中文的启动脚本**：cmd.exe 按系统 ANSI 代码页（zh-CN 是 GBK）解析 `.bat`。无 BOM 的 UTF-8 会被当 GBK 读出乱码并被当成命令执行；全角标点会被误认为命令分隔符破坏脚本结构。更麻烦的是 `for /f '...'` 里不能放带引号的绝对路径（会报"系统找不到指定的路径"）。**用 `.ps1`**，编码问题只需 BOM，转义规则也简单得多。
+- **`.ps1` 有 BOM 仍可能输出乱码——那是输出链路的编码不一致，不是脚本编码问题**：在 VSCode 里用 **Code Runner 扩展**跑 `run.ps1`，中文会变成 `寮€鍙戞€佸惎鍔?`；同一脚本在 `cmd` 窗口里完全正常。
+  - **链路**：脚本里的中文字符串 →（PowerShell 编码）→ 字节流 →（Code Runner 解码）→ 显示。两端必须用同一套编码。
+  - **VSCode 终端/输出面板按 UTF-8 解码**，而 Windows PowerShell 5.1 的控制台输出默认跟随系统 ANSI 代码页（936/GBK）。GBK 字节被当 UTF-8 解释 → 乱码。
+  - **正确解法**：脚本开头把 `[Console]::OutputEncoding` 和 `$OutputEncoding` 都强制设为 **UTF-8 无 BOM**（`New-Object System.Text.UTF8Encoding $false`），与下游对齐。
+  - **⚠️ 曾经写错过一次**：一开始"跟随系统 ANSI 代码页"设成 GBK，结果 Code Runner 那边**依然乱码**（因为 Code Runner 要的是 UTF-8），只是我当时的验证脚本用了 `StandardOutputEncoding=GBK` 自己解码，把错误掩盖了。**这个教训比结论本身重要：验证脚本必须用"下游真实使用的编码"去解码，否则得到的是假阳性。**
+  - **判断方法**：抓输出的**原始字节**看十六进制。`E6 A0 87` = "标"的 UTF-8 编码；`B1 EA` = GBK 编码。按字节判断比按"能不能显示"判断可靠得多。
+  - **不要用 `Start-Job` 验证编码**：PowerShell 的 Job 会对自己捕获的字节再解一次码，结果是 artifact，不代表真实终端也不代表 Code Runner。用 `cmd /c "... > file"` 抓原始字节。
+
+- **`-Dfile.encoding=UTF-8` 管不到 `System.out` / `System.err`**：它只影响**文件读写**和 `String.getBytes()` 的默认字符集。日志走 stdout，所以只设 `file.encoding` 时，中文日志输出的仍是 **GBK 字节**，在按 UTF-8 解码的终端里就是 `����������Ŀ¼��`。
+  - **JDK 19+ 的 stdout/stderr 编码独立**，由 `stdout.encoding` / `stderr.encoding` 决定，未指定时跟随操作系统 ANSI 代码页（简体中文 Windows = GBK）。
+  - **完整的三件套**，少一个都会漏：
+    ```
+    -Dfile.encoding=UTF-8
+    -Dstdout.encoding=UTF-8
+    -Dstderr.encoding=UTF-8
+    ```
+  - 这三项已加进 `run.ps1`、`build/run-dev.ps1`、`build/package.ps1` 三处，**改一处必须同步另外两处**（否则用打包产物跑出来的日志又是乱码）。
+  - **`slf4j-simple` 默认把日志打到 stderr**：抓日志要读 `RedirectStandardError`，读 stdout 会得到 0 字节（实测踩到）。
+  - **验证方法**：写个最小 Java 程序打印中文，用同一套参数跑，然后分别按 UTF-8 与 GBK 解码比对。打印 `stdout.encoding` 的值可以直接确认参数是否生效。
+
+- **排查"是不是代码改动引入的"之前，先看 `git status` 和文件修改时间**：上面这个乱码一度被怀疑是前端重构引入的，实际 `git status` 干净、`run.ps1` 最后修改时间早于重构。**先用时间戳排除，能省掉一整轮无效排查。**
+
 - **`AutoStart.selfHeal()` 的异常必须兜住**：它是"锦上添花"的功能（修正自启路径），但抛异常会终止 main 线程，导致程序启动即崩溃。任何非核心功能都不该有这个权力。
 - **验证打包产物必须在项目目录之外运行**：在 `build/out/` 下运行时，本会话的沙箱环境会限制注册表访问（`RegOpenKeyEx` 返回 5 ERROR_ACCESS_DENIED），表现为"开机自启启用失败"，**会误判成代码 bug**。复制到 `%TEMP%` 下再测。排查依据：`Get-Acl` 会看到一个未解析的 SID `S-1-4-*`。
 - **`jlink --list-modules --module-path build/runtime` 显示的不是裁剪结果**：它会显示 70 个模块（完整 JDK 的解析视图）。真实清单要看 `build/runtime/release` 文件里的 `MODULES=` 行，或直接跑 `runtime/bin/java --list-modules`。实测是 14 个模块、48MB。
@@ -185,10 +212,21 @@ powershell build/package.ps1 -Zip   # 追加生成发布用 zip
 - **进度更新不走全局 store 广播**：高频事件会拖垮列表渲染，用独立订阅通道 + `requestAnimationFrame` 合并（见 `progress.js`）。
 - **`EventSource` 不能用**：它重连时不带 `Authorization` 头。必须用 `fetch` + `ReadableStream` 自己实现 SSE 读取。
 - **列表虚拟滚动用 `aria-activedescendant` 而非移动真实焦点**：真实焦点会随被销毁的行一起丢失。
-- **CSS 不许出现字面量**：所有间距、字号、颜色走 `base.css` 的 `:root` 令牌。审阅方法：grep 所有数字字面量，凡是不在 `:root` 里的都改成令牌。
-- **列表表头与行的 grid 列宽必须完全一致**：`.list-header` 与 `.entry-row` 都用 `minmax(0,1fr) 120px 140px 200px`，改一个必须改另一个，否则列错位。
+- **CSS 不许出现字面量**：所有间距、字号、颜色走 `base.css` 的 `:root` 令牌。审阅方法：grep 所有数字字面量，凡是不在 `:root` 里的都改成令牌。**1px 边框和百分比除外**（几何常量，不是设计决策）。
+- **Bahnschrift 不含中文字形**：`--font-display` 只能挂在**纯 ASCII** 元素上（品牌字标、tag、版本号、配额、文件名）。挂到中文上会回落雅黑，在字重和基线上露破绽。页面标题默认走 `--font-ui`，只有纯 ASCII 的标题才加 `.content-title--ascii` 换字体。这类"字体回落"在截图里表现为字形突变，很容易被误认成渲染 bug。
+- **行高必须从 `--h-row` 令牌读，不要在 JS 里硬编码**：虚拟滚动按固定行高算位置，CSS 改了行高而 JS 没跟上，所有行的位置整体错位。`ListView.js` 用 `readCssPx('--h-row', 64)`。同理行高不随断点变化。
+- **`--measure`（68ch）是正文行宽上限，不是整页宽度上限**：拿它当 `.content-inner` 的 max-width 会让规则列表挤在左半边、右侧空出几百像素。结构区用 `--w-content`（940px）。
+- **遮罩 `--scrim` 不能从 `--bg` 派生**：浅色主题下 `--bg` 本来就是亮的，`color-mix(--bg-sunken, transparent)` 混出来的是白色遮罩，背景完全不后退，抽屉看起来像浮在空中。遮罩必须是暗的，两套主题分别给值。
+- **主题的媒体查询必须用 `:root:not([data-theme])` 限定**：否则 `prefers-color-scheme` 和显式 `data-theme` 会打架。首屏防闪烁用 `<head>` 里的**同步**脚本（`theme-boot.js`，非 module、非 defer）。
+- **浅色令牌写了两遍**（`@media` 里一份、`[data-theme="light"]` 一份）：自定义属性无法批量赋值，只能复制。改一处必须同步改另一处，`verify-ui.ps1` 有背景色断言兜底。
+- **`--text-faint` 承载 11px 的时间戳，必须 ≥ 4.5:1**：它曾经是 `#79847b`，浅色下只有 3.49:1。视觉上"淡一点更好看"，但小字达不到 AA 就是可读性缺陷。改配色后必须重算对比度（`build/probe-flex.ps1` 会打印）。
+- **不用原生 `confirm()`**：它用操作系统对话框风格、阻塞、样式无法控制，是"网页套壳"最强的信号。用 `components/confirm.js` 的 `confirmAsync()`，`body` 传 htm 模板而不是字符串（进程列表需要 `<ul>`，`\n` 在对话框里不换行）。
 - **`quota.remaining < 0` 表示"配额未知"，不是负数**：`Quota.unknown()` 的占位值是 -1。界面必须用 `formatQuota()` 与 `isQuotaLow()`，直接拼字符串会显示成 "-1/60"。
-- **用 CDP 验证前端，不要靠截图**：`build/verify-ui.ps1` 通过 Chrome DevTools Protocol 真实点击并断言 DOM 状态。截图不能断言"按钮点下去有没有反应"，而且当前模型读不了图片。
+- **用 CDP 验证前端，不要靠截图**：`build/verify-ui.ps1` 通过 Chrome DevTools Protocol 真实点击并断言 DOM 状态。截图不能断言"按钮点下去有没有反应"，也不适合判断交互细节。
+- **跑 `verify-ui.ps1` 必须用 `build/run-verify-ui.ps1` 包一层**：它起一个**独立**的 headless Chrome（随机端口 + 随机 `user-data-dir`），跑完只关自己启动的那个。直接复用 9222 会连到旧服务残留的页面，**所有数据类断言会假失败**（实测踩到，排查了很久）。**绝不要 `Stop-Process -Name chrome`**——那会连用户自己的浏览器一起杀掉。
+- **CDP 的大响应（截图 base64）会被拆成多个 WebSocket 分片**：`ReceiveAsync` 必须累积到 `EndOfMessage` 才能拼成完整 JSON，否则永远等不到匹配的 `id`，表现为脚本挂死。
+- **PowerShell 5.1 不支持 `||` 和三元 `?:`**：验证脚本里嵌 JS 时尤其容易忘。另外**单引号字符串不能包含单引号**，写 `querySelector('[aria-selected="true"]')` 会截断字符串并报"缺少终止符"。
+- **`$Ws` 这类形参名会和脚本内部的 `$sw`（Stopwatch）冲突**（PowerShell 变量名大小写不敏感）：`verify-ui.ps1` 的形参已改名为 `$DebuggerUrl`。
 
 ### SSE（Javalin 的坑，试了五次才对）
 

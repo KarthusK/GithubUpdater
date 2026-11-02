@@ -38,6 +38,40 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
+# ──────────────────────────── 中文输出编码 ────────────────────────────
+#
+# 背景：在 VSCode 里用 Code Runner 扩展跑本脚本，中文会变成
+#   "寮€鍙戞€佸惎鍔?" 这样的乱码；而在普通终端里直接跑是完全正常的。
+#
+# 根因不在脚本，也不在 BOM（BOM 一直都在），而是**输出链路上有两段编码不一致**：
+#
+#   脚本里的中文字符串 --[PowerShell 编码]--> 字节流 --[Code Runner 解码]--> 显示
+#
+# VSCode 的终端/输出面板按 **UTF-8** 解码子进程输出，而 Windows
+# PowerShell 5.1 的控制台输出编码默认是系统 ANSI 代码页（936/GBK）。
+# GBK 字节按 UTF-8 解释 → 乱码。
+#
+# 修法：把 PowerShell 的输出编码**强制设为 UTF-8（无 BOM）**，
+# 与下游的解码方式对齐。
+#
+# 为什么不是设成 GBK：
+#   一度试过"跟随系统 ANSI 代码页"，那是错的。实测同一份输出，
+#   按 GBK 解码正常、按 UTF-8 解码乱码 —— 说明下游要的是 UTF-8。
+#   设成 GBK 等于主动制造乱码。
+#
+# 为什么不会影响普通终端：
+#   Windows Terminal / conhost 在 chcp 65001 或现代版本下本就按 UTF-8 渲染；
+#   即便在旧 chcp 936 窗口里，PowerShell 5.1 的 OutputEncoding 设成 UTF-8
+#   也会让 Write-Host 自己走正确的转码路径。已实测两端都正常。
+try {
+    $utf8 = New-Object System.Text.UTF8Encoding $false   # $false = 不带 BOM
+    [Console]::OutputEncoding = $utf8
+    # $OutputEncoding 影响"通过管道传给另一个程序"的编码，一并设成 UTF-8。
+    $OutputEncoding = $utf8
+} catch {
+    # 设不了就按原样继续，不要因为这个让脚本失败
+}
+
 # ──────────────────────────── 输出辅助 ────────────────────────────
 
 function Write-Step($n, $text) {
@@ -232,7 +266,23 @@ $jvmArgs = @(
     '-XX:+UseCompressedOops'         # 小堆下用压缩指针
     '-XX:MinHeapFreeRatio=10'        # 堆占用低于 10% 时收缩
     '-XX:MaxHeapFreeRatio=25'        # 空闲超过 25% 时归还给 OS
+
+    # 编码三件套，缺一不可。
+    #
+    # -Dfile.encoding 只管**文件读写**和 String.getBytes() 的默认字符集，
+    # **不影响 System.out / System.err**。日志走 stdout，
+    # 所以只设 file.encoding 时，中文日志仍是 GBK 字节。
+    #
+    # JDK 19+ 的 stdout/stderr 编码由 stdout.encoding / stderr.encoding 决定，
+    # 未指定时跟随操作系统 ANSI 代码页（简体中文 Windows = GBK）。
+    # 而 VSCode 的输出面板/终端按 UTF-8 解码，GBK 字节就变成
+    #   "����������Ŀ¼��" 这样的乱码。
+    #
+    # 实测：只有 file.encoding 时，日志按 GBK 解才正常；
+    #       补上 stdout/stderr 后，按 UTF-8 解正常。
     '-Dfile.encoding=UTF-8'
+    '-Dstdout.encoding=UTF-8'
+    '-Dstderr.encoding=UTF-8'
 
     # 关掉 Java2D 的 D3D/OpenGL 管线 —— 内存优化收益最大的一项。
     # AWT 初始化（托盘需要）会连带初始化 Java2D，默认走 D3D 并加载显卡驱动。

@@ -52,7 +52,12 @@ $javaOptions = @(
     '-XX:+UseCompressedOops'
     '-XX:MinHeapFreeRatio=10'
     '-XX:MaxHeapFreeRatio=25'
+    # 编码三件套。file.encoding 不影响 System.out/err ——
+    # 日志走 stdout，只设 file.encoding 时中文日志仍是 GBK 字节，
+    # 在按 UTF-8 解码的终端/输出面板里会变成乱码。详见 run.ps1 的注释。
     '-Dfile.encoding=UTF-8'
+    '-Dstdout.encoding=UTF-8'
+    '-Dstderr.encoding=UTF-8'
     # 关掉 Java2D 的 Direct3D 管线。
     #
     # 这是本项目内存优化收益最大的一项，且原因非常隐蔽：

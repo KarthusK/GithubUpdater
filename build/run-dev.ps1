@@ -29,7 +29,13 @@ $jvmArgs = @(
     '-XX:+UseCompressedOops'        # 小堆下用压缩指针
     '-XX:MinHeapFreeRatio=10'       # 堆占用低于 10% 时收缩
     '-XX:MaxHeapFreeRatio=25'       # 空闲超过 25% 时归还给 OS
+
+    # 编码三件套。file.encoding 不影响 System.out/err ——
+    # 日志走 stdout，只设 file.encoding 时中文日志仍是 GBK 字节，
+    # 在按 UTF-8 解码的终端/输出面板里会变成乱码。详见 run.ps1 的注释。
     '-Dfile.encoding=UTF-8'
+    '-Dstdout.encoding=UTF-8'
+    '-Dstderr.encoding=UTF-8'
 
     # 关掉 Java2D 的 D3D/OpenGL 管线 —— 内存优化收益最大的一项。
     # AWT 初始化（托盘需要）会连带初始化 Java2D，默认走 D3D 并加载显卡驱动。
