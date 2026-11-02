@@ -1,0 +1,90 @@
+# ============================================================
+# GithubUpdater .gitattributes
+#
+# 目的只有一个：让换行符在所有机器上保持确定，避免"我这边没改
+# 任何东西，git 却说整个文件都改了"这种噪声 diff。
+#
+# ────────────────────────────────────────────────────────────
+# 本项目的实际约定（2026-11-02 全量核实）
+# ────────────────────────────────────────────────────────────
+#
+# 全部源文件统一用 LF，包括：
+#   - 51 个 Java 源文件：纯 LF，无 BOM
+#   - 5 个 PowerShell 脚本：纯 LF，**带 BOM**
+#   - 全部前端 js/css/html/mjs：纯 LF，无 BOM
+#   - README / AGENTS / pom.xml / .gitignore：纯 LF
+#
+# 注意这里有个容易搞错的地方：.ps1 是 **LF + BOM**，不是 CRLF。
+# Windows 上常见的说法是"PowerShell 脚本要 CRLF"，但本项目所有脚本
+# 一直是 LF，PowerShell 5.1 和 7 都能正常执行（已实测）。
+# 所以下面不能写 eol=crlf —— 那会把 5 个脚本全部标记成已修改。
+#
+# BOM 是必须保留的，但 git 的 eol 属性管不到 BOM（BOM 是文件内容
+# 的一部分，不是换行符）。BOM 靠编辑器和 AGENTS.md 的约定来守：
+# 用文本编辑工具改 .ps1 会静默抹掉 BOM，改完必须复查。
+# ============================================================
+
+# 默认：自动识别文本文件，检出时保持仓库里的 LF，不做平台转换。
+#
+# 用 eol=lf 而不是 text=auto，是因为 text=auto 会让 Windows 上的
+# 检出变成 CRLF，而本项目所有文件现在都是 LF。用 eol=lf 才能保证
+# 检出结果与当前工作区完全一致，不会产生无意义的 diff。
+* text=auto eol=lf
+
+# ──────────── 明确指定为文本的文件类型 ────────────
+#
+# 这些是人工编写的源码与文档，需要参与 diff 和合并。
+# 逐个列出而不是只靠 * 通配，是为了防止将来某个文件因为
+# 内容里恰好有特殊字节而被 git 误判成二进制。
+
+*.java      text eol=lf
+*.js        text eol=lf
+*.mjs       text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.md        text eol=lf
+*.xml       text eol=lf
+*.ps1       text eol=lf
+*.json      text eol=lf
+*.txt       text eol=lf
+*.bat       text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+LICENSE     text eol=lf
+
+# ──────────── 明确指定为二进制的文件类型 ────────────
+#
+# 二进制文件不做换行符转换，也不参与 diff。
+# 本项目目前没有这类文件（jar 和 dll 都不入库），但列出来是防御性的：
+# 万一将来有图标、字体或测试用的二进制素材，不会被 git 破坏。
+
+*.jar       binary
+*.dll       binary
+*.exe       binary
+*.ico       binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.zip       binary
+*.db        binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+
+# ──────────── 语言与 diff 提示 ────────────
+#
+# 让 GitHub 和各类工具正确识别文件类型、做语法高亮。
+# *.mjs 显式标成 JavaScript，否则部分工具会当成未知类型。
+
+*.java      diff=java
+*.mjs       linguist-language=JavaScript
+vendor/*.mjs linguist-vendored
+
+# ──────────── 打包产物的标记 ────────────
+#
+# build/ 下的产物不进仓库（见 .gitignore），这里只是标记语义。
+# linguist-vendored 让 GitHub 不把这些文件计入语言统计。
+
+build/out/**    linguist-vendored
+build/runtime/** linguist-vendored

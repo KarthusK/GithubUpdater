@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-token" content="{{API_TOKEN}}">
+    <title>GithubUpdater</title>
+
+    <link rel="stylesheet" href="/assets/css/base.css">
+    <link rel="stylesheet" href="/assets/css/layout.css">
+    <link rel="stylesheet" href="/assets/css/components.css">
+
+    <!--
+      零构建的关键：importmap 把裸模块名映射到本地的 vendor 文件。
+      浏览器原生支持 ESM + importmap，不需要 webpack/vite。
+
+      必须本地化，不能从 CDN 加载——本工具是离线桌面软件，
+      用户可能断网、公司网络可能屏蔽 CDN、GitHub 被墙时 CDN 也不一定通。
+    -->
+    <script type="importmap">
+    {
+      "imports": {
+        "preact": "/assets/vendor/preact.mjs",
+        "preact/hooks": "/assets/vendor/preact-hooks.mjs",
+        "htm": "/assets/vendor/htm.mjs",
+        "htm/preact": "/assets/vendor/htm-preact.mjs"
+      }
+    }
+    </script>
+</head>
+<body>
+    <div id="app"></div>
+    <script type="module" src="/assets/js/main.js"></script>
+</body>
+</html>

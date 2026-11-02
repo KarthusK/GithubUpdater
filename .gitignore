@@ -1,0 +1,128 @@
+# ============================================================
+# GithubUpdater .gitignore
+#
+# 原则：构建产物、运行时数据、IDE 配置一律不提交。
+# 但 build/*.ps1 与 build/README.txt 是构建脚本和用户文档，必须跟踪。
+# ============================================================
+
+# ──────────── Maven 构建产物 ────────────
+
+target/
+# Maven Wrapper 的 jar 需要跟踪，但下载缓存不跟踪
+.mvn/wrapper/maven-wrapper.jar
+
+# ──────────── 运行时数据（便携模式的 data/ 目录） ────────────
+
+# 全部运行时数据：SQLite 库、配置、runtime.json、原生库解压产物
+#
+# 注意 data/tmp/ 会堆积 sqlite-jdbc 每次启动解压的 DLL（每个约 1MB）。
+# 程序启动时会自动清理上一轮残留，这里忽略是为了不把垃圾提交进仓库。
+data/
+
+# 若有人把 data/ 里的配置文件当模板提交，用 ! 单独放行：
+# !data/config.example.json
+
+# ──────────── 设计文档（暂不公开） ────────────
+#
+# docs/ 里是完整的设计文档与六个阶段的验收记录，含大量实现细节、
+# 实测数据和踩坑分析。当前项目仍在开发阶段，文档改动频繁，
+# 提交进来会让 git 历史被文档噪声淹没。
+#
+# 等进入稳定期后再决定是否公开：删掉下面这行即可开始跟踪。
+# 届时应同步检查文档里是否有本机路径、内网地址等不适合公开的信息。
+docs/
+
+# ──────────── 构建脚本的产物 ────────────
+
+# jlink 裁剪出的 JRE（48MB）
+build/runtime/
+
+# jpackage 的 app-image（76MB）
+build/out/
+
+# package.ps1 的临时 staging 目录
+build/stage/
+
+# 发布 zip（59MB）
+build/*.zip
+
+# 诊断探针编译产物
+build/probe/
+build/javac-check/
+build/*.class
+
+# 一次性诊断探针源码。
+#
+# 这些是排查特定问题时写的独立小程序（托盘渲染路径、焦点行为、
+# 菜单离屏渲染、GetAsyncKeyState 键状态等），不参与构建。
+# 其中几个是已废弃 Swing 托盘方案的验证代码，留着只会误导后来的人。
+# 结论已经写进 docs/13 与 docs/14，探针本身没有保留价值。
+build/*.java
+
+# 脚本运行时产生的临时文件
+build/*.log
+build/*.err
+build/cp.txt
+
+# ──────────── IDE / 编辑器 ────────────
+#
+# 全部忽略，不做任何例外。
+#
+# 理由：编辑器是个人选择，同事可能用 IntelliJ IDEA、Eclipse 或 VSCode。
+# 提交某个 IDE 的配置等于暗示"本项目用这个"，而且配置文件里常含
+# 本机绝对路径（JDK 安装位置、Maven 仓库路径），对别人直接失效。
+#
+# 需要共享的构建配置已经在 pom.xml 和 build/*.ps1 里，不依赖 IDE。
+
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VSCode 的 Java 扩展生成的 Eclipse 项目文件（按本机路径生成）
+.classpath
+.project
+.settings/
+.factorypath
+bin/
+
+# 各语言服务缓存
+*.code-workspace
+.vscode-java/
+
+# NetBeans
+nbproject/
+
+# ──────────── 操作系统 ────────────
+
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS（万一有人在 mac 上克隆）
+.DS_Store
+._*
+
+# ──────────── 日志与临时文件 ────────────
+
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# 崩溃日志
+hs_err_pid*.log
+replay_pid*.log
+
+# ──────────── 敏感信息 ────────────
+
+# 绝对不要提交真实的 GitHub Token
+# data/config.json 已被 data/ 整体忽略，这里再兜一层，
+# 防止有人把配置拷到别处当示例
+config.json
+!config.example.json
+*.token
+secrets.*

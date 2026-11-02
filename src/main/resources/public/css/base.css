@@ -1,0 +1,112 @@
+/* 设计令牌 —— 所有样式必须走这些变量，不写字面量。
+   完整约定见 docs/05-前端设计.md 第 9 节。 */
+
+:root {
+    /* 间距：4 的倍数，只用这 6 档 */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+
+    /* 字号：5 档 */
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-md: 14px;
+    --text-lg: 16px;
+    --text-xl: 20px;
+
+    --leading-tight: 1.3;
+    --leading-normal: 1.6;
+
+    /* 圆角 */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 10px;
+
+    /* 颜色：暗色为默认 */
+    --bg: #16181d;
+    --bg-elev: #1e2128;
+    --bg-hover: #242832;
+    --bg-active: #2c313d;
+    --border: #2a2f38;
+    --border-strong: #3a4150;
+
+    --text: #e4e6eb;
+    --text-dim: #8b919c;
+    --text-faint: #5c6370;
+
+    --accent: #4a9eff;
+    --accent-hover: #6bb0ff;
+    --success: #3fb950;
+    --warn: #d29922;
+    --danger: #f85149;
+
+    /* 层叠与动效 */
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, .24);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, .32);
+    --duration: 120ms;
+    --ease: cubic-bezier(.2, 0, .2, 1);
+
+    /* 字体：中英文显式配对 */
+    --font-ui: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    --font-mono: "Cascadia Code", "Consolas", "Microsoft YaHei UI", monospace;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: #ffffff;
+        --bg-elev: #f6f8fa;
+        --bg-hover: #eef1f4;
+        --bg-active: #e4e8ec;
+        --border: #d0d7de;
+        --border-strong: #afb8c1;
+        --text: #1f2328;
+        --text-dim: #656d76;
+        --text-faint: #8c959f;
+        --shadow-md: 0 2px 8px rgba(140, 149, 159, .16);
+        --shadow-lg: 0 8px 24px rgba(140, 149, 159, .24);
+    }
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    line-height: var(--leading-normal);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* 数字等宽，进度百分比和文件大小不会跳动 */
+.num {
+    font-variant-numeric: tabular-nums;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}

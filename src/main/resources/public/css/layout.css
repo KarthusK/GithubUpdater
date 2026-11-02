@@ -1,0 +1,131 @@
+/* 主框架布局 */
+
+.app-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.app-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    height: 48px;
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+    flex-shrink: 0;
+}
+
+.app-title {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    margin: 0;
+}
+
+.app-header-spacer {
+    flex: 1;
+}
+
+.app-body {
+    flex: 1;
+    overflow: auto;
+    padding: var(--space-4);
+    min-height: 0;
+}
+
+/* 列表页：工具栏 + 虚拟列表占满剩余高度，不用 app-body 的 padding */
+.app-body--flush {
+    padding: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    height: 100%;
+    min-height: 240px;
+    color: var(--text-dim);
+    text-align: center;
+}
+
+.empty-state-title {
+    font-size: var(--text-lg);
+    color: var(--text);
+    margin: 0;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-faint);
+    flex-shrink: 0;
+}
+
+.status-dot--ok {
+    background: var(--success);
+}
+
+.status-dot--warn {
+    background: var(--warn);
+}
+
+.status-dot--error {
+    background: var(--danger);
+}
+
+.muted {
+    color: var(--text-dim);
+    font-size: var(--text-sm);
+}
+
+/* 列表表头：列宽必须与 .entry-row 的 grid 完全一致，否则错位 */
+.list-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 120px 140px 200px;
+    gap: var(--space-3);
+    align-items: center;
+    height: 32px;
+    padding: 0 var(--space-3);
+    border-bottom: 1px solid var(--border);
+    font-size: var(--text-xs);
+    color: var(--text-faint);
+    flex-shrink: 0;
+    background: var(--bg);
+}
+
+.list-header-actions {
+    text-align: right;
+}
+
+/* 详情页：内容区留白 */
+.detail-body {
+    padding: var(--space-4);
+    max-width: 880px;
+}
+
+/* 设置页 */
+.settings-body {
+    padding: var(--space-4);
+    max-width: 640px;
+}
+
+/* 连接状态条：SSE 断开时显示 */
+.conn-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    background: color-mix(in oklch, var(--warn) 15%, transparent);
+    color: var(--warn);
+    font-size: var(--text-sm);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
