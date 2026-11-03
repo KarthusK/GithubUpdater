@@ -807,8 +807,13 @@
     background: var(--bg-sunken);
     cursor: pointer;
     position: relative;
-    /* 与首行文字基线对齐 */
-    margin-top: 2px;
+    /* 与首行文字垂直居中对齐。
+     *
+     * 这里必须用计算式而不是写死的 2px：控件和文字都是固定尺寸，但字号/行高
+     * 一旦改动，写死的偏移就会失准（曾经写 2px，而实际需要 1.4px，
+     * 结果是勾选框比标题文字整体沉下去约 1px，肉眼能看出来）。
+     * 偏移 = (首行行高 - 控件高度) / 2。 */
+    margin-top: calc((var(--text-sm) * var(--leading-snug) - var(--size-check)) / 2);
     transition: background-color var(--dur-fast) var(--ease),
                 border-color var(--dur-fast) var(--ease);
 }
@@ -834,19 +839,87 @@
     transform: rotate(45deg);
 }
 
+/* 禁用态。
+ *
+ * 只用 opacity 降低是不够的——实测下来，一个变淡的勾选框在视觉上
+ * 和旁边的说明文字几乎没区别，用户看到的是"一个选项"，
+ * 要真的去点一下、发现没反应，才知道它不可用。
+ *
+ * 所以这里给它一套**形态上**就不一样的表现，让人扫一眼就明白：
+ *   1. 虚线边框 —— 实心边框代表"这是一个可交互的控件"，虚线代表"这里是空的/占位"
+ *   2. 斜线底纹 —— 明确表示"此路不通"，这是最广为认知的禁用符号
+ *   3. 去饱和的底色 —— 不再是 --bg-sunken（那个颜色看起来像"可以填东西"）
+ *   4. 文字用 --disabled-text，比 --text-faint 更退后，与"次要信息"区分开
+ */
 .checkbox-row input[type="checkbox"]:disabled {
     cursor: not-allowed;
-    opacity: .5;
+    /* 不是简单的半透明：边框转虚线、底色去饱和、加斜线底纹 */
+    border: 1px dashed var(--disabled-line);
+    background:
+        repeating-linear-gradient(
+            135deg,
+            transparent 0,
+            transparent var(--size-hatch),
+            var(--disabled-line) var(--size-hatch),
+            var(--disabled-line) calc(var(--size-hatch) + 1px)
+        );
+    opacity: 1; /* 不再靠整体透明度，避免把文字一起拖淡 */
+}
+
+/* 标题行：标题文字 + 可选的「不可用」徽标。
+ *
+ * 必须包成 flex 行而不是让它们裸排：
+ * .badge 是 inline-flex 且带一个空的 ::before 圆点，它的**基线由那个空圆点
+ * 决定**，直接塞进文字流里会垂直错位——标题和徽标不在同一水平线上。
+ * 用 flex + align-items 显式对齐才能稳。
+ *
+ * 行高固定为「首行行高」，这样复选框的 margin-top 计算式才有确定的基准，
+ * 不会因为徽标把这一行撑高而失准。
+ */
+.checkbox-row-title {
+    display: flex;
+    align-items: center;   /* 徽标字号更小，用 center 比 baseline 更稳 */
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    min-height: calc(var(--text-sm) * var(--leading-snug));
+}
+
+/* 标题行里的状态徽标做成描边胶囊，而不是"点 + 文字"。
+ *
+ * 原因：badge 默认形态是 5px 圆点 + 同色文字，那套样式是为表格行里的
+ * 「有新版本 / 已应用」设计的——在那种场景下一行只有一个徽标，点是个色码。
+ * 但塞进标题文字后面时，那个 5px 空心点在 12px 字号下看起来就是一个句号，
+ * 整行读起来变成"开机自动启动。不可用"。加描边胶囊把两者在形态上分开，
+ * 顺带也符合"标签"的语义（它确实是个标签，不是一条状态）。
+ */
+.checkbox-row-title .badge--muted {
+    padding: 1px var(--space-2);
+    border: 1px solid var(--disabled-line);
+    border-radius: var(--radius-sm);
+    color: var(--disabled-text);
+    /* 胶囊形态不需要色点 */
+}
+
+.checkbox-row-title .badge--muted::before {
+    display: none;
 }
 
 .checkbox-row label {
     cursor: pointer;
+    /* 显式 block：label 默认是 inline，里面放 flex 标题行 + block 说明文字时，
+       行盒会按 inline 规则参与排版，导致说明文字的左边缘和标题对不齐 */
+    display: block;
+    /* 占满剩余宽度，说明文字才不会因为 inline 收缩而换行得很难看 */
+    flex: 1;
+    min-width: 0;
     line-height: var(--leading-snug);
 }
 
 .checkbox-row input:disabled + label {
     cursor: not-allowed;
-    color: var(--text-faint);
+    /* --disabled-text 比 --text-faint 更退后：faint 用于"次要但可读"的信息，
+       禁用态需要再暗一档，才能和不禁用时的说明文字区分开 */
+    color: var(--disabled-text);
 }
 
 /* ── 单选：自绘 ────────────────────────────────────────────── */

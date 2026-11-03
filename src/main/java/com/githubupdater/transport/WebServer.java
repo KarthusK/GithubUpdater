@@ -1102,9 +1102,22 @@ public final class WebServer {
         data.put("anonymousCheckBatchLimit", config.anonymousCheckBatchLimit);
         // 开机自启读的是注册表的真实状态，不是配置字段——
         // 用户可能手工删掉了 Run 项，界面必须反映现实。
-        data.put("autoStart", com.githubupdater.infra.win.AutoStart.isEnabled());
-        data.put("autoStartSupported",
-                com.githubupdater.infra.win.AutoStart.currentExecutable().isPresent());
+        //
+        // 但"注册表里有值"不等于"当前生效"：
+        //   - 开发模式（java -jar）根本没有固定的 exe，自启无从谈起
+        //   - 注册表里的路径可能指向已被删除或移动的目录（上次运行留下的残留）
+        //
+        // 所以必须同时要求「环境支持」+「注册表路径仍指向一个真实存在的文件」，
+        // 否则界面会出现自相矛盾的状态：勾选框打着勾，下面却写着"无法设置"。
+        // 这是实测踩到的——开发期做过一次打包验证，注册表遗留了指向
+        // 临时目录的项，之后每次 java -jar 启动都显示成"已开启"。
+        boolean autoStartSupported = com.githubupdater.infra.win.AutoStart
+                .currentExecutable().isPresent();
+        boolean autoStartEnabled = autoStartSupported
+                && com.githubupdater.infra.win.AutoStart.isEnabled()
+                && com.githubupdater.infra.win.AutoStart.registeredExecutableExists();
+        data.put("autoStart", autoStartEnabled);
+        data.put("autoStartSupported", autoStartSupported);
         data.put("keepBackups", config.keepBackups);
         data.put("schemaVersion", config.schemaVersion);
         data.put("version", "0.1.0");

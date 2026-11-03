@@ -60,6 +60,7 @@
     --size-marker: 9px;      /* 向导步骤点 */
     --size-indicator: 5px;   /* 徽章色点 */
     --size-check: 16px;      /* 复选框/单选钮边长 */
+    --size-hatch: 3px;       /* 禁用态斜线底纹的间距 */
     --h-progress: 4px;
     --h-progress-lg: 6px;
 
@@ -139,6 +140,13 @@
     --live: #46b3a0;
     --danger: #e0705d;
 
+    /* 禁用态：比 --text-faint 更退后，且不带任何色相。
+       目的是让"不可用"和"可用但次要"在视觉上分开——
+       只把 opacity 调低时，禁用的勾选框看起来只是"淡一点"，
+       和旁边的说明文字区分不开，用户要真去点一下才发现点不动。 */
+    --disabled-line: #2a3431;
+    --disabled-text: #5a6660;
+
     --on-signal: #181005;
     --on-live: #04120f;
     --on-danger: #1a0805;
@@ -183,6 +191,9 @@
         --live: #0f7a6c;
         --danger: #a63a2a;
 
+        --disabled-line: #c4cbc1;
+        --disabled-text: #8a938c;
+
         --on-signal: #fff8ee;
         --on-live: #f2fffb;
         --on-danger: #fff5f2;
@@ -213,6 +224,9 @@
     --signal: #8f5c1b;
     --live: #0f7a6c;
     --danger: #a63a2a;
+
+    --disabled-line: #c4cbc1;
+    --disabled-text: #8a938c;
 
     --on-signal: #fff8ee;
     --on-live: #f2fffb;

@@ -205,6 +205,44 @@ Check '设置分节数 ≥ 6' ($sections -ge 6)
 Check '不再使用卡片' (Eval 'document.querySelectorAll(".card").length') 0
 Check '未出现「-1/」' (Eval 'document.body.innerText.includes("-1/")') $false
 
+# 「启动」区块：复选框与标题行的垂直中心必须重合。
+#
+# 这里曾经用写死的 margin-top: 2px 对齐，而实际需要 1.4px，勾选框整体
+# 沉下去约 1px——静态截图里不明显，但用户一眼就能看出"没对齐"。
+# 现在用 calc((行高 - 控件高)/2) 表达，这条断言锁住它别再退回去。
+Check '复选框与标题行垂直居中对齐' (Eval @"
+(() => {
+  const input = document.querySelector('#auto-start');
+  if (!input) return 'no checkbox';
+  const title = input.closest('.checkbox-row').querySelector('.checkbox-row-title');
+  if (!title) return 'no title';
+  const a = input.getBoundingClientRect();
+  const b = title.getBoundingClientRect();
+  const delta = Math.abs((a.top + a.height / 2) - (b.top + b.height / 2));
+  return delta < 0.6 ? 'aligned' : ('off by ' + delta.toFixed(2) + 'px');
+})()
+"@) 'aligned'
+
+# 「不可用」徽标必须是描边胶囊（不是 5px 色点 + 文字，那个形态在标题
+# 后面看起来就是一个句号，整行读成"开机自动启动。不可用"）
+Check '不可用徽标是描边胶囊形态' (Eval @"
+(() => {
+  const b = document.querySelector('.checkbox-row-title .badge--muted');
+  if (!b) return 'no badge';
+  const cs = getComputedStyle(b);
+  const dot = getComputedStyle(b, '::before');
+  const hasBorder = parseFloat(cs.borderTopWidth) > 0;
+  const dotHidden = dot.display === 'none';
+  return (hasBorder && dotHidden) ? 'capsule' : ('border=' + cs.borderTopWidth + ' dot=' + dot.display);
+})()
+"@) 'capsule'
+
+# 开发模式（java -jar）下必须：未勾选 + 禁用。
+# 后端三重判断（环境支持 + 注册表有值 + 路径仍存在）任一不满足都要落到这里。
+Check '开机自启未勾选' (Eval 'document.querySelector("#auto-start").checked') $false
+Check '开机自启已禁用' (Eval 'document.querySelector("#auto-start").disabled') $true
+Check '显示「不可用」' (Eval 'document.body.innerText.includes("不可用")')
+
 # ── 6. 主题切换 ──────────────────────────────────
 Write-Host '6. 主题切换' -ForegroundColor Cyan
 

@@ -6,7 +6,7 @@ GithubUpdater：Windows 上的 GitHub 软件版本跟踪与下载工具。常驻
 
 **已实测通过的门槛**：**打包产物空载 77.2MB、跑完完整流程后稳态 119.6MB**。**阈值 150MB**（2026-11-02 由 120MB 放宽，见 [`docs/07-验收与风险.md`](docs/07-验收与风险.md) 的变更记录）。
 
-**测试**：`mvn test` → **138 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
+**测试**：`mvn test` → **143 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
 
 **发布产物**：`build/GithubUpdater-0.1.0-win-x64.zip`，**59.5 MB**，解压即用，无需安装 Java。
 
@@ -53,7 +53,7 @@ mvn -v                              # 自检：必须显示 Maven 3.10.0 + Java 
 .\run.ps1 -Minimized                # 静默启动（不自动开浏览器）
 
 mvn -DskipTests package             # 编译 + 打包 → target/github-updater.jar
-mvn test                            # 跑全部单元测试（当前 138 个）
+mvn test                            # 跑全部单元测试（当前 143 个）
 mvn test -Dtest=AssetMatcherTest    # 跑单个测试类
 
 powershell build/run-dev.ps1        # 启动 daemon（run.ps1 用等价参数，二选一）
@@ -165,6 +165,17 @@ powershell build/package.ps1 -Zip    # 追加生成发布用 zip
 - **排查"是不是代码改动引入的"之前，先看 `git status` 和文件修改时间**：上面这个乱码一度被怀疑是前端重构引入的，实际 `git status` 干净、`run.ps1` 最后修改时间早于重构。**先用时间戳排除，能省掉一整轮无效排查。**
 
 - **`AutoStart.selfHeal()` 的异常必须兜住**：它是"锦上添花"的功能（修正自启路径），但抛异常会终止 main 线程，导致程序启动即崩溃。任何非核心功能都不该有这个权力。
+- **"注册表里有 Run 项"不等于"自启生效"——两者必须分开判断**：`AutoStart.isEnabled()` 只查 `HKCU\...\Run` 里有没有那个值，**不判断路径是否还有效、也不判断当前环境能否自启**。直接拿它当界面状态会得到自相矛盾的显示：勾选框打着勾，下面却写着"当前以开发模式运行，无法设置开机自启"。
+  - **实测触发场景**：开发期做过一次打包验证，注册表留下指向临时目录的项；之后每次 `java -jar` 跑开发版，设置页都显示"已开启"，而那个 exe 早被删了。
+  - **正确判断**（`WebServer.getSettings`）：必须同时满足三条才返回 `true`
+    1. `currentExecutable().isPresent()` —— 当前是打包产物，有固定 exe（即 `autoStartSupported`）
+    2. `isEnabled()` —— 注册表里有值
+    3. `registeredExecutableExists()` —— 注册表里的路径**仍指向一个真实存在的文件**
+  - **宁可显示未启用，也不要显示一个不会生效的"已启用"**。用户看到勾选就会以为已经生效，开机没起来才是更糟的体验。
+  - 前端只需 `checked=${settings.autoStart}` + `disabled=${!settings.autoStartSupported}`。**不要在 JS 里再补一层 `autoStart && supported` 的逻辑**——状态归一化是后端的职责，前端只负责渲染。
+  - **禁用态不能只靠 `opacity:.5`**：实测一个变淡的勾选框和旁边说明文字几乎没区别，用户要真去点一下才发现点不动。必须给出形态上就不一样的表现（虚线边框 + 斜线底纹 + `不可用` 徽标），见「前端」章节的 disabled 条目。
+  - `AutoStart.extractPath()` 与 `normalize()` 共用同一套引号解析，**别写两份**：一份要保留大小写（文件存在性检查），一份要转小写（路径比较），差异只在后处理。
+
 - **验证打包产物必须在项目目录之外运行**：在 `build/out/` 下运行时，本会话的沙箱环境会限制注册表访问（`RegOpenKeyEx` 返回 5 ERROR_ACCESS_DENIED），表现为"开机自启启用失败"，**会误判成代码 bug**。复制到 `%TEMP%` 下再测。排查依据：`Get-Acl` 会看到一个未解析的 SID `S-1-4-*`。
 - **`jlink --list-modules --module-path build/runtime` 显示的不是裁剪结果**：它会显示 70 个模块（完整 JDK 的解析视图）。真实清单要看 `build/runtime/release` 文件里的 `MODULES=` 行，或直接跑 `runtime/bin/java --list-modules`。实测是 14 个模块、48MB。
 
@@ -230,6 +241,15 @@ powershell build/package.ps1 -Zip    # 追加生成发布用 zip
 - **`--text-faint` 承载 11px 的时间戳，必须 ≥ 4.5:1**：它曾经是 `#79847b`，浅色下只有 3.49:1。视觉上"淡一点更好看"，但小字达不到 AA 就是可读性缺陷。改配色后必须重算对比度（`build/probe-flex.ps1` 会打印）。
 - **不用原生 `confirm()`**：它用操作系统对话框风格、阻塞、样式无法控制，是"网页套壳"最强的信号。用 `components/confirm.js` 的 `confirmAsync()`，`body` 传 htm 模板而不是字符串（进程列表需要 `<ul>`，`\n` 在对话框里不换行）。
 - **`quota.remaining < 0` 表示"配额未知"，不是负数**：`Quota.unknown()` 的占位值是 -1。界面必须用 `formatQuota()` 与 `isQuotaLow()`，直接拼字符串会显示成 "-1/60"。
+- **禁用态要"一眼可辨"，不能只靠 `opacity:.5`**：一个变淡的勾选框和旁边说明文字几乎没区别，用户看到的是"一个选项"，要真去点一下、发现没反应，才知道不可用——这是实测的反馈。
+  - **四层信号叠加**，扫一眼就能判断：
+    1. **虚线边框** —— 实线边框意味着"可交互的控件"，虚线意味着"这里是空的/占位"
+    2. **斜线底纹**（`repeating-linear-gradient` 135°）—— 最广为认知的"此路不通"符号
+    3. **专用令牌** `--disabled-line` / `--disabled-text`，比 `--text-faint` 更退后，和"次要但可读"的信息区分开
+    4. **`不可用` 文字徽标**（`.badge .badge--muted`）—— 最强的信号，不依赖用户理解视觉隐喻
+  - **不要用 `opacity` 淡化**：它会把里面的文字一起拖淡，反而降低可读性，且视觉差异太弱。改用形态差异表达"禁用"。
+  - 令牌要加三处：`:root` 暗色、`@media (prefers-color-scheme: light)`、`:root[data-theme="light"]`。**改一处必须同步另外两处**（`verify-ui.ps1` 有主题断言兜底）。
+  - 斜线间距用 `--size-hatch` 令牌，别写 `3px` 字面量（几何常量除外规则不适用于纹理间距）。
 - **用 CDP 验证前端，不要靠截图**：`build/verify-ui.ps1` 通过 Chrome DevTools Protocol 真实点击并断言 DOM 状态。截图不能断言"按钮点下去有没有反应"，也不适合判断交互细节。
 - **跑 `verify-ui.ps1` 必须用 `build/run-verify-ui.ps1` 包一层**：它起一个**独立**的 headless Chrome（随机端口 + 随机 `user-data-dir`），跑完只关自己启动的那个。直接复用 9222 会连到旧服务残留的页面，**所有数据类断言会假失败**（实测踩到，排查了很久）。**绝不要 `Stop-Process -Name chrome`**——那会连用户自己的浏览器一起杀掉。
 - **CDP 的大响应（截图 base64）会被拆成多个 WebSocket 分片**：`ReceiveAsync` 必须累积到 `EndOfMessage` 才能拼成完整 JSON，否则永远等不到匹配的 `id`，表现为脚本挂死。

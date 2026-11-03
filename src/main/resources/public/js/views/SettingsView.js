@@ -281,7 +281,12 @@ export function SettingsView() {
                         onChange=${e => save({ autoStart: e.currentTarget.checked })}
                     />
                     <label for="auto-start">
-                        开机自动启动
+                        <span class="checkbox-row-title">
+                            开机自动启动
+                            ${!settings.autoStartSupported
+                                ? html`<span class="badge badge--muted">不可用</span>`
+                                : ''}
+                        </span>
                         <span class="setting-row-hint">
                             ${settings.autoStartSupported
                                 ? '写入当前用户的开机启动项，不需要管理员权限。移动程序目录后，下次启动会自动修正路径。'

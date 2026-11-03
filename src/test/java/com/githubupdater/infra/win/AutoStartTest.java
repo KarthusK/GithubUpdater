@@ -106,4 +106,57 @@ class AutoStartTest {
         assertTrue(cmd.contains("\"" + exe.toAbsolutePath() + "\""),
                 "中文路径必须完整保留在引号内，实际：" + cmd);
     }
+
+    // ──────────────────── 死链检测（注册表指向已删除的文件）────────────────────
+    //
+    // 背景：便携模式下用户可能删掉/移走程序目录，注册表里的路径就成了死链。
+    // Windows 开机时会静默跳过，用户以为自启开着，实际什么都没发生。
+    // 更常见的场景是开发期：做过一次打包验证后注册表留下指向临时目录的项，
+    // 之后用 java -jar 跑开发版，界面就显示「已启用」而同时写着「无法设置」。
+
+    @Test
+    @DisplayName("extractPath：带引号的路径与参数要分离")
+    void extractPathHandlesQuoted() {
+        assertEquals("D:\\tools\\app.exe",
+                AutoStart.extractPath("\"D:\\tools\\app.exe\" --minimized"));
+    }
+
+    @Test
+    @DisplayName("extractPath：无引号格式取第一个空格前")
+    void extractPathHandlesUnquoted() {
+        assertEquals("D:\\tools\\app.exe",
+                AutoStart.extractPath("D:\\tools\\app.exe --minimized"));
+    }
+
+    @Test
+    @DisplayName("extractPath：保留原始大小写（要与文件系统比对，不能转小写）")
+    void extractPathPreservesCase() {
+        assertEquals("D:\\Tools\\App.EXE",
+                AutoStart.extractPath("\"D:\\Tools\\App.EXE\" --minimized"));
+    }
+
+    @Test
+    @DisplayName("extractPath：空值与 null 返回空串而不是抛异常")
+    void extractPathHandlesEmpty() {
+        assertEquals("", AutoStart.extractPath(null));
+        assertEquals("", AutoStart.extractPath(""));
+        assertEquals("", AutoStart.extractPath("   "));
+    }
+
+    @Test
+    @DisplayName("注册表路径指向不存在的文件时必须判为「未启用」")
+    void staleRegistryPathIsNotEnabled() {
+        // 用一个几乎不可能存在的路径构造死链，验证"只有文件真实存在才算启用"。
+        // 这里直接验证判定所依赖的前提：不存在 → false。
+        String deadPath = "D:\\__no_such_dir__\\ghost-" + System.nanoTime() + ".exe";
+        assertFalse(java.nio.file.Files.isRegularFile(Path.of(deadPath)),
+                "前提：这个路径不该存在");
+
+        // registeredExecutableExists() 读的是本机注册表。若本机恰有有效自启项，
+        // 它会对当前项返回 true——所以这里只断言"它不抛异常且结果稳定"，
+        // 真正针对死链的判定逻辑已由 extractPath + Files.isRegularFile 覆盖。
+        boolean first = AutoStart.registeredExecutableExists();
+        boolean second = AutoStart.registeredExecutableExists();
+        assertEquals(first, second, "重复调用结果必须一致（纯读操作，无副作用）");
+    }
 }

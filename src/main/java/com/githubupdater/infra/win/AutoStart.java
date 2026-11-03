@@ -87,6 +87,61 @@ public final class AutoStart {
         }
     }
 
+    /**
+     * 注册表里记录的那个 exe 是否仍然存在。
+     *
+     * <p><b>为什么需要这个判断</b>：「注册表里有值」不等于「自启真的会生效」。
+     * 便携模式下用户可能把整个目录删掉或改名，注册表里的路径就成了死链，
+     * Windows 开机时会静默跳过——用户以为自启开着，实际什么都没发生。
+     *
+     * <p>开发期最常见：做过一次打包验证后，<code>HKCU\...\Run</code> 里会留下
+     * 指向临时目录的项。之后用 {@code java -jar} 跑开发版，界面就会显示
+     * 「已开启」而下面同时写着「无法设置」，自相矛盾。
+     *
+     * <p>读不到值或解析失败时返回 {@code false}——**宁可显示未启用，
+     * 也不要显示一个不会生效的"已启用"**。
+     *
+     * @return 注册表路径指向的文件是否存在
+     */
+    public static boolean registeredExecutableExists() {
+        Optional<String> command = registeredCommand();
+        if (command.isEmpty()) {
+            return false;
+        }
+        String path = extractPath(command.get());
+        if (path.isEmpty()) {
+            return false;
+        }
+        try {
+            return java.nio.file.Files.isRegularFile(Path.of(path));
+        } catch (RuntimeException e) {
+            // 路径含非法字符等，当作不存在
+            return false;
+        }
+    }
+
+    /**
+     * 从命令行里取出 exe 路径（去掉引号与参数）。
+     *
+     * <p>与 {@link #normalize} 的解析规则保持一致，但保留原始大小写——
+     * 这里要拿去做文件存在性检查，不能转小写。
+     */
+    static String extractPath(String command) {
+        if (command == null) {
+            return "";
+        }
+        String s = command.trim();
+        if (s.isEmpty()) {
+            return "";
+        }
+        if (s.startsWith("\"")) {
+            int end = s.indexOf('"', 1);
+            return end > 0 ? s.substring(1, end) : s.substring(1);
+        }
+        int space = s.indexOf(' ');
+        return space > 0 ? s.substring(0, space) : s;
+    }
+
     /** 读注册表里记录的命令行。 */
     public static Optional<String> registeredCommand() {
         try {
@@ -191,24 +246,10 @@ public final class AutoStart {
         return normalize(a).equals(normalize(b));
     }
 
-    /** 提取命令行里的 exe 路径并规范化。 */
+    /** 提取命令行里的 exe 路径并规范化（转小写、斜杠统一）。 */
     private static String normalize(String command) {
-        if (command == null) {
-            return "";
-        }
-        String s = command.trim();
-
-        String path;
-        if (s.startsWith("\"")) {
-            int end = s.indexOf('"', 1);
-            path = end > 0 ? s.substring(1, end) : s.substring(1);
-        } else {
-            // 没引号：取第一个空格之前的部分
-            int space = s.indexOf(' ');
-            path = space > 0 ? s.substring(0, space) : s;
-        }
-
-        // Windows 路径大小写不敏感，且反斜杠/正斜杠等价
-        return path.replace('/', '\\').toLowerCase(java.util.Locale.ROOT);
+        // Windows 路径大小写不敏感，且反斜杠/正斜杠等价。
+        // 取值逻辑与 extractPath 共用，避免两处解析规则漂移。
+        return extractPath(command).replace('/', '\\').toLowerCase(java.util.Locale.ROOT);
     }
 }
