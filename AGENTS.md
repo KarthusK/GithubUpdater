@@ -133,6 +133,14 @@ powershell build/package.ps1 -Zip    # 追加生成发布用 zip
   $ErrorActionPreference = $prev
   ```
 - **`-jar` 之前不能放程序参数**：`java -Xmx40m ... --minimized -jar app.jar` 会报 `Unrecognized option: --minimized`。程序参数必须在 jar 路径之后：`java @jvmArgs -jar $jar @appArgs`。
+- **`mvn -q` 会让编译期间完全静默**：`-q`（quiet）吞掉全部 `[INFO]`，一次完整 build 要 50 秒上下，屏幕上什么都不动——用户无法区分"在干活"和"卡死"。
+  - **但也不能全量透传**：实测一次完整 build 有 **609 行**，其中 **558 行是 `[WARNING]`**，而 shade 插件列出的 `overlapping classes` 明细就占 380 行（每次构建都一样，纯噪音）。真正有信息量的只有 8 行插件动作 + 11 行 BUILD 结果。
+  - **`run.ps1` 的做法**：逐行流式读 Maven 输出，只透传四类行——插件阶段动作（`^\[INFO\] --- `）、关键状态（`Building` / `BUILD ` / `Total time`）、依赖下载、错误。压缩后 **109 行 → 14 行**，每个阶段都看得见。
+  - **shade 的警告要特殊处理**，否则它会淹没一切：
+    - 明细行以 `[WARNING]   `（多空格）开头，用 `^\[WARNING\] (?!\s{2,})` 只保留摘要行；
+    - 摘要行本身也会列出几十个 jar 名（单行可达 1500+ 字符），改成累计计数、最后报一行汇总；
+    - 那段固定的 6 行说明（"has detected that some files are..."）内容永不变化，直接吞掉。
+  - **必须用流式（管道逐行）而不是攒完再解析**：用户要的是"正在动"的实时反馈，攒到结束再打印等于没解决。
 - **不要用 `.bat` 做带中文的启动脚本**：cmd.exe 按系统 ANSI 代码页（zh-CN 是 GBK）解析 `.bat`。无 BOM 的 UTF-8 会被当 GBK 读出乱码并被当成命令执行；全角标点会被误认为命令分隔符破坏脚本结构。更麻烦的是 `for /f '...'` 里不能放带引号的绝对路径（会报"系统找不到指定的路径"）。**用 `.ps1`**，编码问题只需 BOM，转义规则也简单得多。
 - **`.ps1` 有 BOM 仍可能输出乱码——那是输出链路的编码不一致，不是脚本编码问题**：在 VSCode 里用 **Code Runner 扩展**跑 `run.ps1`，中文会变成 `寮€鍙戞€佸惎鍔?`；同一脚本在 `cmd` 窗口里完全正常。
   - **链路**：脚本里的中文字符串 →（PowerShell 编码）→ 字节流 →（Code Runner 解码）→ 显示。两端必须用同一套编码。

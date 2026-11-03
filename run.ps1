@@ -227,9 +227,94 @@ if ($SkipBuild) {
     Write-Step 3 '编译中（首次会下载依赖，可能需要几分钟）……'
     Write-Host ''
 
-    & mvn -q -DskipTests package
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail '编译失败' '请查看上面的错误信息。' @(
+    # 编译不再用 -q 静默。
+    #
+    # 原先是 `mvn -q -DskipTests package`：-q 会把所有 [INFO] 吞掉，
+    # 结果编译期间屏幕上什么都不动，几十秒到几分钟没有任何反馈——
+    # 用户无法判断是在干活还是卡死，体验上等同于挂起。
+    #
+    # 但也不能全量输出。实测一次完整 build 的 609 行里：
+    #   558 行是 [WARNING]，其中 380 行是 shade 插件列出的
+    #   "overlapping classes" 明细（每次构建都一样，纯噪音）
+    #   真正有信息量的只有 8 行插件动作 + 11 行 BUILD 结果
+    #
+    # 折中：**逐行流式**读出 Maven 输出，只透传有信息量的行。
+    # 流式而不是攒完再过滤，因为用户要的是"正在动"的实时反馈。
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+    # 阶段动作（compiler / jar / shade ...）—— 这是"正在干活"的主要反馈
+    $stagePattern = '^\[INFO\] --- '
+    # 关键状态行
+    $infoPattern  = '^\[INFO\] (Building|BUILD |Total time)'
+    # 依赖下载（首次构建时的主要耗时来源，必须看得见）
+    $dlPattern    = 'Download(ing|ed) from'
+    # 错误：全部透传
+    $errPattern   = '^\[ERROR\]'
+    # 告警：**只要摘要行**，不要它下面那串缩进的明细
+    #
+    # shade 的输出形如：
+    #   [WARNING] a.jar, b.jar define 111 overlapping classes:
+    #   [WARNING]   - META-INF/maven/...
+    #   [WARNING]   - org.eclipse.jetty...
+    #   [WARNING]   - 101 more...
+    # 明细行都以 "[WARNING]   " 开头（多空格），据此排除。
+    $warnPattern  = '^\[WARNING\] (?!\s{2,})'
+    # shade 的 "define N overlapping ..." 摘要：即使只有摘要行，
+    # 每条也会列出几十个 jar 名，一行能长到 1500+ 字符。
+    # 这类重叠是正常现象（shade 自己说 usually not harmful），
+    # 统一压成一行汇总，不逐条刷屏。
+    $overlapPattern = 'define \d+ overlapping'
+    # shade 每次构建都会打的固定说明段落（6 行），内容完全不变，
+    # 对判断构建成功与否没有帮助。一并吞掉。
+    $shadeBoilerplate = 'has detected that some files are|present in two or more JARs|' +
+                        'single version of the file is copied|Usually this is not harmful|' +
+                        'otherwise try to manually exclude|mvn dependency:tree -Ddetail=true|' +
+                        'See https://maven.apache.org/plugins/maven-shade-plugin'
+
+    $overlapCount = 0
+
+    & mvn -DskipTests package --batch-mode 2>&1 | ForEach-Object {
+        $line = [string]$_
+
+        # 先处理重叠摘要：累计计数，不立即输出
+        if ($line -match $overlapPattern) {
+            $overlapCount++
+            return
+        }
+        # 再吞掉 shade 的固定说明段落
+        if ($line -match $shadeBoilerplate) {
+            return
+        }
+
+        $hit = $line -match $stagePattern -or
+               $line -match $infoPattern  -or
+               $line -match $dlPattern    -or
+               $line -match $errPattern   -or
+               $line -match $warnPattern
+        if ($hit) {
+            # 去掉冗长的 [INFO] 前缀，只留可读内容
+            $clean = $line -replace '^\[INFO\] ', '' -replace '^\[INFO\]', ''
+            $color = if ($line -match '^\[ERROR\]') { 'Red' }
+                     elseif ($line -match '^\[WARNING\]') { 'Yellow' }
+                     else { 'Gray' }
+            Write-Host "  $clean" -ForegroundColor $color
+        }
+    }
+
+    # 重叠摘要统一在最后报一行
+    if ($overlapCount -gt 0) {
+        Write-Host "  [WARNING] shade: $overlapCount 处 jar 间重复资源（正常，可忽略）" -ForegroundColor Yellow
+    }
+
+    $sw.Stop()
+    $exitCode = $LASTEXITCODE
+    Write-Host ''
+    Write-Host ("  耗时 {0:N1} 秒" -f $sw.Elapsed.TotalSeconds) -ForegroundColor DarkGray
+
+    if ($exitCode -ne 0) {
+        Write-Host ''
+        Write-Host '  完整日志请重新执行：mvn -DskipTests package' -ForegroundColor Yellow
+        Write-Fail '编译失败' '请看上面的 Maven 输出。' @(
             '常见原因：'
             '  - 网络问题导致依赖下载失败（检查能否访问 Maven 中央仓库）'
             '  - JDK 版本不对（必须是 21）'
