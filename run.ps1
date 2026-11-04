@@ -1,7 +1,16 @@
-﻿#Requires -Version 5.1
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     GithubUpdater 开发态一键启动：检查环境 → 编译 → 启动。
+
+.NOTES
+    本脚本要求 PowerShell 7+（pwsh），文件以 UTF-8 **无 BOM** 保存。
+
+    这不是口味问题。Windows PowerShell 5.1 按系统 ANSI 代码页（简体中文 = GBK）
+    解析无 BOM 的 UTF-8 脚本，中文注释会被读成乱码并截断字符串，报
+    "缺少终止符"这种和真实原因毫不相干的语法错误。
+    加了 `#Requires -Version 7.0` 之后，5.1 会在**语法解析之前**先拒绝执行并
+    明确提示版本不匹配，不会再抛出那种误导性的解析错误。
 
 .DESCRIPTION
     给"刚拿到代码、想跑起来看看"的人用。三件事全包：
@@ -40,10 +49,10 @@ Set-Location -LiteralPath $PSScriptRoot
 
 # ──────────────────────────── 中文输出编码 ────────────────────────────
 #
-# 背景：在 VSCode 里用 Code Runner 扩展跑本脚本，中文会变成
+# 背景：在 VSCode 里用 Code Runner 扩展跑本脚本，中文曾变成
 #   "寮€鍙戞€佸惎鍔?" 这样的乱码；而在普通终端里直接跑是完全正常的。
 #
-# 根因不在脚本，也不在 BOM（BOM 一直都在），而是**输出链路上有两段编码不一致**：
+# 根因不在脚本，而是**输出链路上有两段编码不一致**：
 #
 #   脚本里的中文字符串 --[PowerShell 编码]--> 字节流 --[Code Runner 解码]--> 显示
 #
@@ -51,18 +60,15 @@ Set-Location -LiteralPath $PSScriptRoot
 # PowerShell 5.1 的控制台输出编码默认是系统 ANSI 代码页（936/GBK）。
 # GBK 字节按 UTF-8 解释 → 乱码。
 #
-# 修法：把 PowerShell 的输出编码**强制设为 UTF-8（无 BOM）**，
-# 与下游的解码方式对齐。
+# 为什么这段现在还留着：
+#   pwsh 7 的 [Console]::OutputEncoding 默认已经是 utf-8（实测 WebName = "utf-8"），
+#   所以在 7 里这段是**冗余但无害**的。保留它是为了不让行为依赖"默认值"——
+#   默认值会随控制台代码页变化，显式设定则不会。将来真正没人用 5.1 后可以删掉。
 #
 # 为什么不是设成 GBK：
 #   一度试过"跟随系统 ANSI 代码页"，那是错的。实测同一份输出，
 #   按 GBK 解码正常、按 UTF-8 解码乱码 —— 说明下游要的是 UTF-8。
 #   设成 GBK 等于主动制造乱码。
-#
-# 为什么不会影响普通终端：
-#   Windows Terminal / conhost 在 chcp 65001 或现代版本下本就按 UTF-8 渲染；
-#   即便在旧 chcp 936 窗口里，PowerShell 5.1 的 OutputEncoding 设成 UTF-8
-#   也会让 Write-Host 自己走正确的转码路径。已实测两端都正常。
 try {
     $utf8 = New-Object System.Text.UTF8Encoding $false   # $false = 不带 BOM
     [Console]::OutputEncoding = $utf8
@@ -132,9 +138,12 @@ if (-not (Get-Command $javaExe -ErrorAction SilentlyContinue)) {
 
 $javaMajor = $null
 try {
-    # 注意：java 把版本信息打到 stderr，而 $ErrorActionPreference='Stop' 会让
-    # 原生命令的 stderr 变成终止性错误。这里必须临时放开为 Continue，
-    # 并用 2>&1 合并两路输出后再匹配。
+    # java 把版本信息打到 stderr。
+    #
+    # 这段临时把 $ErrorActionPreference 放开为 Continue，是 Windows PowerShell
+    # 5.1 的必需品：5.1 里原生命令写 stderr 会被 Stop 策略升级成终止性错误。
+    # pwsh 7 已经改了行为（实测 Stop 下 `& mvn -v 2>&1` 不再抛异常），
+    # 所以这里现在只是**冗余但无害**的保护，留着不妨碍任何事。
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $settings = & $javaExe -XshowSettings:properties -version 2>&1 | Out-String
@@ -187,7 +196,7 @@ if (-not $mvn) {
 # 出现在编译阶段，混在一堆输出里很难注意到，所以在这里提前拦。
 $mvnVer = $null
 try {
-    # 同 Java 版本检测：原生命令的 stderr 在 Stop 策略下会抛终止错误
+    # 同 Java 版本检测：这段是 5.1 的 stderr 兼容代码（pwsh 7 下冗余但无害）
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $mvnOut = & mvn -v 2>&1 | Out-String

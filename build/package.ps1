@@ -1,4 +1,5 @@
-﻿# jpackage：生成 app-image
+#Requires -Version 7.0
+# jpackage：生成 app-image（要求 PowerShell 7+ / pwsh，UTF-8 无 BOM）
 #
 # 只做 app-image，不做 msi/exe 安装器——后者需要 WiX，而 JDK 21 只兼容 WiX 3。
 # 详见 docs/06-构建与发布.md。

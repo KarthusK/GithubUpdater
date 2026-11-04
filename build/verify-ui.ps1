@@ -1,10 +1,11 @@
-﻿# CDP 交互验证脚本。用 Chrome DevTools Protocol 真实操作页面。
-# 参数：$Ws CDP WebSocket 地址，$BaseUrl 面板地址
+#Requires -Version 7.0
+# CDP 交互验证脚本。用 Chrome DevTools Protocol 真实操作页面。
+# 参数：$DebuggerUrl CDP WebSocket 地址，$BaseUrl 面板地址
+#
+# 要求 PowerShell 7+（pwsh），文件以 UTF-8 无 BOM 保存。
 #
 # 与浏览器无关的注意事项：
 #   · CDP 的大响应（截图）会被拆成多个分片，Recv-Until 必须累积到 EndOfMessage。
-#   · 本文件必须存为 UTF-8 with BOM，否则 PowerShell 5.1 按 GBK 解析中文会报
-#     "缺少终止符"。
 
 param(
     # 形参不能叫 $ws/$Ws：脚本内部有 $sw（Stopwatch），而 PowerShell 变量名

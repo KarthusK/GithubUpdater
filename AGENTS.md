@@ -43,7 +43,9 @@ GithubUpdater：Windows 上的 GitHub 软件版本跟踪与下载工具。常驻
 
 ## 常用命令
 
-环境已就绪：JDK 21.0.8 Temurin（`D:\dev_software\jdk21`）、Maven 3.10.0（`%MAVEN_HOME%` = `D:\JAVA_software\apache-maven-3.10.0`，本地仓库 `D:\JAVA_software\repository`）、git 2.55。
+环境已就绪：JDK 21.0.8 Temurin（`D:\dev_software\jdk21`）、Maven 3.10.0（`%MAVEN_HOME%` = `D:\JAVA_software\apache-maven-3.10.0`，本地仓库 `D:\JAVA_software\repository`）、git 2.55、**PowerShell 7.4.4（`D:\dev_software\PowerShell\pwsh.exe`）**。
+
+**所有脚本必须用 `pwsh` 跑，不要用 `powershell`**：后者是 Windows PowerShell 5.1，脚本开头的 `#Requires -Version 7.0` 会直接拒绝执行。
 
 ```powershell
 mvn -v                              # 自检：必须显示 Maven 3.10.0 + Java version 21.0.8
@@ -56,12 +58,12 @@ mvn -DskipTests package             # 编译 + 打包 → target/github-updater.
 mvn test                            # 跑全部单元测试（当前 143 个）
 mvn test -Dtest=AssetMatcherTest    # 跑单个测试类
 
-powershell build/run-dev.ps1        # 启动 daemon（run.ps1 用等价参数，二选一）
-powershell build/run-verify-ui.ps1  # CDP 端到端验证前端：自己起独立 headless Chrome，跑完自动清理
-powershell build/probe-flex.ps1      # 窄窗溢出 / reduced-motion / 配色对比度
-powershell build/jlink.ps1           # jlink 裁剪 JRE → build/runtime
-powershell build/package.ps1         # jpackage app-image → build/out/GithubUpdater/
-powershell build/package.ps1 -Zip    # 追加生成发布用 zip
+pwsh build/run-dev.ps1              # 启动 daemon（run.ps1 用等价参数，二选一）
+pwsh build/run-verify-ui.ps1        # CDP 端到端验证前端：自己起独立 headless Chrome，跑完自动清理
+pwsh build/probe-flex.ps1           # 窄窗溢出 / reduced-motion / 配色对比度
+pwsh build/jlink.ps1                # jlink 裁剪 JRE → build/runtime
+pwsh build/package.ps1              # jpackage app-image → build/out/GithubUpdater/
+pwsh build/package.ps1 -Zip         # 追加生成发布用 zip
 ```
 
 **注意 `verify-ui.ps1` 不直接跑**：它需要 `-DebuggerUrl` 参数（一个已经连好的 CDP WebSocket 地址），
@@ -103,15 +105,20 @@ powershell build/package.ps1 -Zip    # 追加生成发布用 zip
     ```
   - **修复**：`.vscode/settings.json` 里设 `java.import.maven.enabled: true`，然后在命令面板执行 **`Java: Clean Java Language Server Workspace` → Reload and delete**，让它重新按 Maven 项目导入（之后会生成 `.project`/`.classpath`）。修完必须 `mvn clean compile` 把被污染的 `target/classes` 整个重建——**只删单个 class 不够**，因为可能有多个被污染。
   - **交叉验证技巧**：从 VSCode 的启动 argfile（`%TEMP%\cp_*.argfile`）里取出它用的完整 classpath，手动 `java -cp "<那串>" com.githubupdater.Main`。能起来就证明**代码和依赖都没问题，纯粹是 class 被污染**。
-- **PowerShell 脚本必须存为 UTF-8 with BOM**：Windows PowerShell 5.1 按 GBK 解析无 BOM 的 UTF-8，中文注释会让字符串截断并报"缺少终止符"。`build/*.ps1` 全部是带 BOM 的。
-- **用文本编辑工具改 `build/*.ps1` 会静默抹掉 BOM**：`edit`/`write` 这类工具按 UTF-8 读写时默认不写 BOM，改完中文注释还在、`git diff` 也正常，但 PowerShell 5.1 下会突然报"缺少终止符"。**改完必须复查**：
+- **PowerShell 脚本一律用 pwsh 7 编写，存为 UTF-8 无 BOM**：所有 `.ps1` 开头都有 `#Requires -Version 7.0`，用 Windows PowerShell 5.1（`powershell`）跑会被明确拒绝。理由：5.1 按系统 ANSI 代码页（GBK）解析无 BOM 的 UTF-8，中文注释会被读成乱码并截断字符串，报出"缺少终止符"这类与真实原因毫不相干的错误——而 pwsh 7 默认按 UTF-8 解析，无 BOM 完全没问题（实测中文正常）。
+  - **`#Requires -Version 7.0` 是这门禁的核心**：它由 PowerShell **在语法解析之前**求值，所以 5.1 拿到无 BOM 中文脚本时给出的是 `ScriptRequiresUnmatchedPSVersion`（"需要 Windows PowerShell 7.0"），而不是莫名其妙的语法错误。**去掉 `#Requires` 就只剩误导性报错了**，别删。
+  - **验收方式**：用 pwsh 7 的解析器检查语法，再抓文件头三个字节确认无 BOM。
   ```powershell
-  Get-ChildItem build -Filter '*.ps1' | ForEach-Object {
-    $b = [System.IO.File]::ReadAllBytes($_.FullName)
-    "{0} BOM={1}" -f $_.Name, ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+  Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+      $errs = $null
+      $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errs)
+      $b = [System.IO.File]::ReadAllBytes($_.FullName)
+      $bom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+      "{0,-28} parse={1,-5} BOM={2}" -f $_.Name, ($errs.Count -eq 0), $bom
   }
   ```
-  补回 BOM：`[System.IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($true)))`。更稳的验收方式是用 **PowerShell 5.1 的解析器**（不是 `pwsh` 7）跑一遍 `[System.Management.Automation.Language.Parser]::ParseFile()`——只有 5.1 才会暴露 GBK 误解析问题。
+  期望输出是 `parse=True BOM=False`。注意 `edit`/`write` 这类工具按 UTF-8 读写时默认不写 BOM，**恰好符合本项目的约定**，不需要额外补 BOM（这与旧约定相反）。
+- **不要在 pwsh 7 时代继续沿用 5.1 的坑**：`$ErrorActionPreference='Stop'` 下原生命令写 stderr **在 pwsh 7 里不再升级成终止性错误**（实测 `& mvn -v 2>&1` 在 Stop 策略下正常返回）。`run.ps1` 里那两处临时放开策略的写法现在是**冗余但无害**的保护，注释已改成这个定性，不要据此以为 7 里也有这个坑。
 - **JVM 参数不能只调 `-Xmx`**：实测 `-Xmx96m` 时 Private Bytes 仍有 **149.5MB**（超阈值），因为差额主要来自原生内存（线程栈、代码缓存、Metaspace、direct memory、PerfData）。固化的完整参数集见 `build/run-dev.ps1` 与 `build/package.ps1`，**不要随手删减**。实测结果见 `docs/08-阶段1验收记录.md` 与 `docs/09-阶段2验收记录.md`。
 - **不要指定 `-Xmn`**：实测 `-Xmn8m` 会让大 JSON 直接进老年代，峰值从 112MB 冲到 119MB。去掉后让 JVM 自适应新生代反而更省。
 - **`MaxHeapFreeRatio` 能真正把内存还给 OS**：配 `-XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=25`，GC 后空闲堆会被收缩归还。这是压住"堆只涨不落"的关键，不是可选优化。
@@ -125,13 +132,14 @@ powershell build/package.ps1 -Zip    # 追加生成发布用 zip
 - **打包产物必须设 `-Djava.io.tmpdir=$APPDIR/data/tmp`**：系统 TEMP 常是 8.3 短名路径（`C:\Users\ADMINI~1\...`），JNA 解压 `jnidispatch.dll` 后 `LoadLibrary` 加载它时会报**"拒绝访问"**——而该目录在 PowerShell 里明明可写（Administrator 有 FullControl）。这个错误信息极具误导性，会让人以为是权限或杀软问题。
 - **`data/tmp` 必须在 JVM 启动前就存在**：`.cfg` 里的 `-Djava.io.tmpdir` 指向它，JVM 启动早期就要用（JNA 解压）。目录不存在时 JVM 打印 "java.io.tmpdir directory does not exist" 并可能失败。`package.ps1` 打包时预创建。
 - **`sqlite-jdbc` 每次启动解压一个带随机 UUID 的新 DLL，且不清理**：文件名形如 `sqlite-3.54.1.0-<uuid>-sqlitejdbc.dll`，每个约 1MB。实测开发期堆到 **46.7MB / 96 个文件**。`Main.cleanupStaleNativeLibs()` 在启动时清理「本次启动之前」的残留——**只能在启动时清，退出时 DLL 仍被映射，Windows 拒绝删除**。如果又发现堆积，先确认这段逻辑没被误删。
-- **PowerShell 里 `$ErrorActionPreference='Stop'` 会让原生命令的 stderr 变成终止性错误**：`java -version`、`mvn -v` 都把信息打到 stderr，直接 `& java -version 2>&1` 会抛异常。正确写法是临时放开策略：
+- **`$ErrorActionPreference='Stop'` 让原生命令的 stderr 变成终止性错误——这是 Windows PowerShell 5.1 的行为，pwsh 7 已不是**：5.1 里 `java -version`、`mvn -v` 把信息打到 stderr，直接 `& java -version 2>&1` 会抛异常；**pwsh 7 实测在 Stop 策略下正常返回**。脚本里保留的临时放开写法是历史兼容（冗余但无害）：
   ```powershell
   $prev = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   $out = & $exe -version 2>&1 | Out-String
   $ErrorActionPreference = $prev
   ```
+  顺带一条仍然有效的：**`mvn ... 2>&1 | ForEach-Object` 里要把 `$_` 当 `[string]` 用**（`$line = [string]$_`）。5.1 下 stderr 行是 `ErrorRecord`、stdout 行是 `String`，不转换就会漏匹配；7 下虽然都是 `String`，但这个写法两边都对，别改。
 - **`-jar` 之前不能放程序参数**：`java -Xmx40m ... --minimized -jar app.jar` 会报 `Unrecognized option: --minimized`。程序参数必须在 jar 路径之后：`java @jvmArgs -jar $jar @appArgs`。
 - **`mvn -q` 会让编译期间完全静默**：`-q`（quiet）吞掉全部 `[INFO]`，一次完整 build 要 50 秒上下，屏幕上什么都不动——用户无法区分"在干活"和"卡死"。
   - **但也不能全量透传**：实测一次完整 build 有 **609 行**，其中 **558 行是 `[WARNING]`**，而 shade 插件列出的 `overlapping classes` 明细就占 380 行（每次构建都一样，纯噪音）。真正有信息量的只有 8 行插件动作 + 11 行 BUILD 结果。
@@ -141,14 +149,14 @@ powershell build/package.ps1 -Zip    # 追加生成发布用 zip
     - 摘要行本身也会列出几十个 jar 名（单行可达 1500+ 字符），改成累计计数、最后报一行汇总；
     - 那段固定的 6 行说明（"has detected that some files are..."）内容永不变化，直接吞掉。
   - **必须用流式（管道逐行）而不是攒完再解析**：用户要的是"正在动"的实时反馈，攒到结束再打印等于没解决。
-- **不要用 `.bat` 做带中文的启动脚本**：cmd.exe 按系统 ANSI 代码页（zh-CN 是 GBK）解析 `.bat`。无 BOM 的 UTF-8 会被当 GBK 读出乱码并被当成命令执行；全角标点会被误认为命令分隔符破坏脚本结构。更麻烦的是 `for /f '...'` 里不能放带引号的绝对路径（会报"系统找不到指定的路径"）。**用 `.ps1`**，编码问题只需 BOM，转义规则也简单得多。
-- **`.ps1` 有 BOM 仍可能输出乱码——那是输出链路的编码不一致，不是脚本编码问题**：在 VSCode 里用 **Code Runner 扩展**跑 `run.ps1`，中文会变成 `寮€鍙戞€佸惎鍔?`；同一脚本在 `cmd` 窗口里完全正常。
+- **不要再写 `.bat` 做带中文的启动脚本**：cmd.exe 按系统 ANSI 代码页（zh-CN 是 GBK）解析 `.bat`。无 BOM 的 UTF-8 会被当 GBK 读出乱码并被当成命令执行；全角标点会被误认为命令分隔符破坏脚本结构。更麻烦的是 `for /f '...'` 里不能放带引号的绝对路径（会报"系统找不到指定的路径"）。**用 `pwsh` 跑 `.ps1`**，编码问题只需"用 UTF-8"，转义规则也简单得多。
+- **`.ps1` 输出乱码是输出链路的编码不一致，不是脚本编码问题**：在 VSCode 里用 **Code Runner 扩展**跑 `run.ps1`，中文曾变成 `寮€鍙戞€佸惎鍔?`；同一脚本在 `cmd` 窗口里完全正常。
   - **链路**：脚本里的中文字符串 →（PowerShell 编码）→ 字节流 →（Code Runner 解码）→ 显示。两端必须用同一套编码。
-  - **VSCode 终端/输出面板按 UTF-8 解码**，而 Windows PowerShell 5.1 的控制台输出默认跟随系统 ANSI 代码页（936/GBK）。GBK 字节被当 UTF-8 解释 → 乱码。
-  - **正确解法**：脚本开头把 `[Console]::OutputEncoding` 和 `$OutputEncoding` 都强制设为 **UTF-8 无 BOM**（`New-Object System.Text.UTF8Encoding $false`），与下游对齐。
+  - **VSCode 终端/输出面板按 UTF-8 解码**。这件事在 Windows PowerShell 5.1 下是真坑（它的控制台输出默认跟随 ANSI 代码页 936/GBK，GBK 字节被当 UTF-8 解 → 乱码）；**换成 pwsh 7 后 `[Console]::OutputEncoding` 默认就是 utf-8（实测 WebName = "utf-8"），问题不再出现**。
+  - **`run.ps1` 里那段显式设定编码的代码现在冗余但无害**，保留是为了不依赖"默认值"（默认值会随控制台代码页变）。将来真正没人用 5.1 后可以删。
   - **⚠️ 曾经写错过一次**：一开始"跟随系统 ANSI 代码页"设成 GBK，结果 Code Runner 那边**依然乱码**（因为 Code Runner 要的是 UTF-8），只是我当时的验证脚本用了 `StandardOutputEncoding=GBK` 自己解码，把错误掩盖了。**这个教训比结论本身重要：验证脚本必须用"下游真实使用的编码"去解码，否则得到的是假阳性。**
   - **判断方法**：抓输出的**原始字节**看十六进制。`E6 A0 87` = "标"的 UTF-8 编码；`B1 EA` = GBK 编码。按字节判断比按"能不能显示"判断可靠得多。
-  - **不要用 `Start-Job` 验证编码**：PowerShell 的 Job 会对自己捕获的字节再解一次码，结果是 artifact，不代表真实终端也不代表 Code Runner。用 `cmd /c "... > file"` 抓原始字节。
+  - **不要用 `Start-Job` 验证编码**：PowerShell 的 Job 会对自己捕获的字节再解一次码，结果是 artifact，不代表真实终端也不代表 Code Runner。用 `pwsh -File xxx.ps1 1> out.bin` 或 `cmd /c "... > file"` 抓原始字节。
 
 - **`-Dfile.encoding=UTF-8` 管不到 `System.out` / `System.err`**：它只影响**文件读写**和 `String.getBytes()` 的默认字符集。日志走 stdout，所以只设 `file.encoding` 时，中文日志输出的仍是 **GBK 字节**，在按 UTF-8 解码的终端里就是 `����������Ŀ¼��`。
   - **JDK 19+ 的 stdout/stderr 编码独立**，由 `stdout.encoding` / `stderr.encoding` 决定，未指定时跟随操作系统 ANSI 代码页（简体中文 Windows = GBK）。
@@ -253,7 +261,7 @@ powershell build/package.ps1 -Zip    # 追加生成发布用 zip
 - **用 CDP 验证前端，不要靠截图**：`build/verify-ui.ps1` 通过 Chrome DevTools Protocol 真实点击并断言 DOM 状态。截图不能断言"按钮点下去有没有反应"，也不适合判断交互细节。
 - **跑 `verify-ui.ps1` 必须用 `build/run-verify-ui.ps1` 包一层**：它起一个**独立**的 headless Chrome（随机端口 + 随机 `user-data-dir`），跑完只关自己启动的那个。直接复用 9222 会连到旧服务残留的页面，**所有数据类断言会假失败**（实测踩到，排查了很久）。**绝不要 `Stop-Process -Name chrome`**——那会连用户自己的浏览器一起杀掉。
 - **CDP 的大响应（截图 base64）会被拆成多个 WebSocket 分片**：`ReceiveAsync` 必须累积到 `EndOfMessage` 才能拼成完整 JSON，否则永远等不到匹配的 `id`，表现为脚本挂死。
-- **PowerShell 5.1 不支持 `||` 和三元 `?:`**：验证脚本里嵌 JS 时尤其容易忘。另外**单引号字符串不能包含单引号**，写 `querySelector('[aria-selected="true"]')` 会截断字符串并报"缺少终止符"。
+- **验证脚本里嵌 JS 时的老坑**：Windows PowerShell 5.1 不支持 `||` 和三元 `?:`；**单引号字符串不能包含单引号**，写 `querySelector('[aria-selected="true"]')` 会截断字符串并报"缺少终止符"。pwsh 7 支持 `||` 和 `?:`，但为了脚本可读性一致，`verify-ui.ps1` 仍沿用原来的写法——**改的时候不要混用两套风格**。
 - **`$Ws` 这类形参名会和脚本内部的 `$sw`（Stopwatch）冲突**（PowerShell 变量名大小写不敏感）：`verify-ui.ps1` 的形参已改名为 `$DebuggerUrl`。
 
 ### SSE（Javalin 的坑，试了五次才对）

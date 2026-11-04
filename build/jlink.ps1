@@ -1,4 +1,5 @@
-﻿# jlink：裁剪 JRE
+#Requires -Version 7.0
+# jlink：裁剪 JRE（要求 PowerShell 7+ / pwsh，UTF-8 无 BOM）
 #
 # 模块清单不能漏 java.net.http（HttpClient 在这个模块里，不在 java.base）
 # 和 jdk.crypto.ec（Java 21 里仍是实模块，漏掉会导致 HTTPS 握手失败）。

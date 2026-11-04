@@ -1,4 +1,7 @@
-﻿# 启动一个独立的 headless Chrome 跑 verify-ui.ps1，结束后只关闭**自己启动的**那个实例。
+#Requires -Version 7.0
+# 启动一个独立的 headless Chrome 跑 verify-ui.ps1，结束后只关闭**自己启动的**那个实例。
+#
+# 要求 PowerShell 7+（pwsh），文件以 UTF-8 无 BOM 保存。
 #
 # 为什么不复用 9222：
 #   · 用户自己的 Chrome 可能占着 9222，复用会连到错误的页面

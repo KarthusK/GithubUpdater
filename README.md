@@ -34,22 +34,27 @@ GitHub 下载慢、资产类型杂、想挂后台慢慢下——这个工具就�
 
 ### 方式二：从源码运行（开发者）
 
-**环境要求**：JDK 21、Maven 3.6.3+（本项目用 3.10.0）
+**环境要求**：JDK 21、Maven 3.6.3+（本项目用 3.10.0）、**PowerShell 7+（pwsh）**
+
+> 脚本要求 PowerShell 7 及以上，Windows 自带的 Windows PowerShell 5.1 **不行**——它会直接报
+> `#requires` 版本不匹配。装法：`winget install Microsoft.PowerShell`，或用
+> [官方安装包](https://github.com/PowerShell/PowerShell/releases)。
+> 装好后用 `pwsh` 而不是 `powershell` 运行脚本。
 
 ```powershell
-.\run.ps1
+pwsh .\run.ps1
 ```
 
 这个脚本会：检查 JDK/Maven 版本 → 编译 → 启动。缺什么会直接告诉你装哪个版本，而不是丢一堆看不懂的编译错误。
 
 ```powershell
-.\run.ps1 -SkipBuild          # 跳过编译直接启动（改完代码想快速重启时用）
-.\run.ps1 -Minimized          # 静默启动，不自动打开浏览器
+pwsh .\run.ps1 -SkipBuild     # 跳过编译直接启动（改完代码想快速重启时用）
+pwsh .\run.ps1 -Minimized     # 静默启动，不自动打开浏览器
 ```
 
 > **PowerShell 执行策略拦住时**（首次运行常见）：
 > ```powershell
-> powershell -ExecutionPolicy Bypass -File .\run.ps1
+> pwsh -ExecutionPolicy Bypass -File .\run.ps1
 > ```
 
 也可以手动来：
@@ -57,7 +62,7 @@ GitHub 下载慢、资产类型杂、想挂后台慢慢下——这个工具就�
 ```powershell
 mvn -DskipTests package       # 编译
 mvn test                      # 跑测试（138 个）
-powershell build/run-dev.ps1  # 启动
+pwsh build/run-dev.ps1        # 启动
 ```
 
 ## 技术栈
@@ -115,9 +120,9 @@ GithubUpdater/
 ## 构建与发布
 
 ```powershell
-powershell build/jlink.ps1           # 裁剪 JRE → build/runtime（48.0 MB，14 模块）
-powershell build/package.ps1         # jpackage → build/out/GithubUpdater/（76.2 MB）
-powershell build/package.ps1 -Zip    # 追加生成发布 zip（59.5 MB）
+pwsh build/jlink.ps1           # 裁剪 JRE → build/runtime（48.0 MB，14 模块）
+pwsh build/package.ps1         # jpackage → build/out/GithubUpdater/（76.2 MB）
+pwsh build/package.ps1 -Zip    # 追加生成发布 zip（59.5 MB）
 ```
 
 **发布物是目录不是单文件 exe**。这是 JVM 形态限制：jlink 裁剪出的 runtime 必须是目录，jpackage 的 exe 只是引导程序。用户拿到 zip 解压即用。

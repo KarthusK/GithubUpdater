@@ -1,4 +1,10 @@
-﻿Write-Host "=== 启动 GithubUpdater (dev) ===" -ForegroundColor Cyan
+#Requires -Version 7.0
+# 启动 GithubUpdater (dev)
+#
+# 要求 PowerShell 7+（pwsh），文件以 UTF-8 无 BOM 保存。
+# run.ps1 用等价参数，日常开发二选一即可。
+
+Write-Host "=== 启动 GithubUpdater (dev) ===" -ForegroundColor Cyan
 
 $jar = "target\github-updater.jar"
 if (-not (Test-Path $jar)) {

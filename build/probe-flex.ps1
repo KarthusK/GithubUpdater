@@ -1,4 +1,6 @@
-﻿# 弹性检查：reduced-motion、配色对比度、窄窗溢出。
+#Requires -Version 7.0
+# 弹性检查：reduced-motion、配色对比度、窄窗溢出。
+# 要求 PowerShell 7+（pwsh），文件以 UTF-8 无 BOM 保存。
 param([string]$Url)
 
 $ErrorActionPreference = 'Stop'
