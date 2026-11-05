@@ -26,8 +26,8 @@ const THEMES = [
 
 export function SettingsView() {
     const [settings, setSettings] = useState(null);
-    const [quota, setQuota] = useState(null);
-    const [tokenInput, setTokenInput] = useState('');
+    const [quota, setQuota] = useState(null);    const [tokenInput, setTokenInput] = useState('');
+    const [caInput, setCaInput] = useState('');
     const [busy, setBusy] = useState(false);
     const theme = useStore(selectors.theme);
 
@@ -65,8 +65,22 @@ export function SettingsView() {
         save({ githubToken: v }).then(() => setTokenInput(''));
     }, [tokenInput, save]);
 
-    const onClearToken = useCallback(async () => {
-        const ok = await confirmAsync({
+    const onSaveCa = useCallback(() => {
+        const v = caInput.trim();
+        if (!v) {
+            toast('请填写 CA 证书文件路径，或点「清除」', 'warn');
+            return;
+        }
+        // 后端会真的试读一次再保存；路径写错会在这里就报出来，
+        // 不会出现"保存成功但重启后才发现加载不了"。
+        save({ customCaFile: v }).then(() => setCaInput(''));
+    }, [caInput, save]);
+
+    const onClearCa = useCallback(() => {
+        save({ customCaFile: '' });
+    }, [save]);
+
+    const onClearToken = useCallback(async () => {        const ok = await confirmAsync({
             title: '清除 GitHub Token？',
             body: html`
                 <p>清除后将退回匿名访问，配额从每小时 5000 次降到 60 次。</p>
@@ -267,6 +281,9 @@ export function SettingsView() {
                 `}
             </section>
 
+            <!-- ── 网络与证书 ───────────────────────────── -->
+            ${renderCustomCaSection(settings, caInput, setCaInput, onSaveCa, onClearCa, busy)}
+
             <!-- ── 启动 ─────────────────────────────────── -->
             <section class="settings-section">
                 <div class="settings-section-head">
@@ -340,5 +357,100 @@ export function SettingsView() {
                 </p>
             </section>
         </div>
+    `;
+}
+
+/**
+ * "网络与证书"分节。
+ *
+ * 这一节存在的唯一理由是中间人代理（加速器、企业网关）——它们会解密 HTTPS
+ * 再重签，而 Java 不认它们的 CA。用户在这里填上那张 CA，就只让本程序信任它。
+ *
+ * 三个状态必须一眼可分：
+ *   · 未配置   灰 —— 用系统默认信任库
+ *   · 已加载   青 —— 证书已生效（附张数）
+ *   · 加载失败 红 —— 路径配了但读不出来，附具体原因
+ *
+ * 还要专门提示"需重启"：SSLContext 在启动时构造，改配置不会热生效。
+ * 不说的话用户会以为已经修好了，回头再检查还是失败，反而更困惑。
+ *
+ * @param {any} settings
+ * @param {string} caInput
+ * @param {(v: string) => void} setCaInput
+ * @param {() => void} onSaveCa
+ * @param {() => void} onClearCa
+ * @param {boolean} busy
+ */
+function renderCustomCaSection(settings, caInput, setCaInput, onSaveCa, onClearCa, busy) {
+    const ca = settings.customCa || {};
+    const active = !!ca.active;
+    const failed = ca.status && ca.status !== 'LOADED' && ca.status !== 'NOT_CONFIGURED';
+
+    let badge;
+    if (failed) {
+        badge = html`<span class="badge badge--error">加载失败</span>`;
+    } else if (active) {
+        badge = html`<span class="badge badge--ok">已加载 ${ca.certCount} 张</span>`;
+    } else {
+        badge = html`<span class="badge badge--muted">使用系统信任库</span>`;
+    }
+
+    return html`
+        <section class="settings-section">
+            <div class="settings-section-head">
+                <h2 class="settings-section-title">网络与证书</h2>
+                ${badge}
+            </div>
+            <p class="settings-section-desc">
+                如果检查时报「TLS 证书链不受信任」或「检测到中间人」，说明本机有加速器、
+                抓包工具或企业网关在解密 HTTPS。把它的根证书（PEM / CRT / DER 均可）
+                填在下面，本程序就能通过校验。
+            </p>
+            <p class="settings-section-desc">
+                <strong>只影响本程序</strong>，不会导入系统信任库。这里的证书是<strong>追加</strong>到
+                默认信任链的，所以关掉代理后仍然能正常访问 GitHub。
+            </p>
+
+            ${failed && html`
+                <p class="settings-section-desc text-danger">
+                    ${ca.detail || '证书加载失败'}
+                </p>
+            `}
+
+            <div class="field">
+                <label class="field-label" for="ca-input">CA 证书文件</label>
+                <div class="row">
+                    <input
+                        id="ca-input"
+                        class="input input--mono grow"
+                        placeholder=${ca.file || '例如 D:\\tools\\proxy-ca.pem'}
+                        value=${caInput}
+                        onInput=${e => setCaInput(e.currentTarget.value)}
+                    />
+                    <${Button} variant="primary" disabled=${busy} onClick=${onSaveCa}>
+                        保存
+                    <//>
+                    ${ca.file && html`
+                        <${Button} variant="ghost" disabled=${busy} onClick=${onClearCa}>
+                            清除
+                        <//>
+                    `}
+                </div>
+                <div class="field-hint field-hint--path">
+                    <span>当前配置</span>
+                    <span class="mono field-hint-path">${ca.file || '未配置'}</span>
+                </div>
+                <span class="field-hint">
+                    相对路径按数据目录解析。保存后会试读一次证书，读不出来不会写入。
+                </span>
+            </div>
+
+            ${ca.requiresRestart && html`
+                <p class="settings-section-desc text-signal">
+                    配置已修改，<strong>重启程序后生效</strong>——
+                    HTTPS 连接在启动时建立，改动不会热更新。
+                </p>
+            `}
+        </section>
     `;
 }

@@ -167,7 +167,8 @@ public final class SqliteStore implements AutoCloseable {
     public List<Entry> listEntries() throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT id, owner, repo, channel, display_name, is_private, " +
-                "last_seen_release_id, last_seen_tag, last_etag, last_checked_at, created_at " +
+                "last_seen_release_id, last_seen_tag, last_etag, last_checked_at, created_at, " +
+                "last_check_status, last_check_error, last_tls_issuer " +
                 "FROM entry ORDER BY created_at DESC")) {
             try (ResultSet rs = ps.executeQuery()) {
                 List<Entry> list = new ArrayList<>();
@@ -182,7 +183,8 @@ public final class SqliteStore implements AutoCloseable {
     public Optional<Entry> findEntry(long id) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT id, owner, repo, channel, display_name, is_private, " +
-                "last_seen_release_id, last_seen_tag, last_etag, last_checked_at, created_at " +
+                "last_seen_release_id, last_seen_tag, last_etag, last_checked_at, created_at, " +
+                "last_check_status, last_check_error, last_tls_issuer " +
                 "FROM entry WHERE id = ?")) {
             ps.setLong(1, id);
             try (ResultSet rs = ps.executeQuery()) {
@@ -194,7 +196,8 @@ public final class SqliteStore implements AutoCloseable {
     public Optional<Entry> findEntry(String owner, String repo) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT id, owner, repo, channel, display_name, is_private, " +
-                "last_seen_release_id, last_seen_tag, last_etag, last_checked_at, created_at " +
+                "last_seen_release_id, last_seen_tag, last_etag, last_checked_at, created_at, " +
+                "last_check_status, last_check_error, last_tls_issuer " +
                 "FROM entry WHERE owner = ? AND repo = ?")) {
             ps.setString(1, owner);
             ps.setString(2, repo);
@@ -265,6 +268,56 @@ public final class SqliteStore implements AutoCloseable {
                 ps.executeUpdate();
             } catch (SQLException e) {
                 throw new IllegalStateException("更新检查时间失败", e);
+            }
+        });
+    }
+
+    /**
+     * 记录一次<b>干净的</b>检查结局（成功或无变化）。
+     *
+     * <p>必须把失败字段清空：否则用户修好网络后重新检查成功，界面却还挂着
+     * 上一次的失败原因，会让人以为问题没解决。
+     */
+    public void updateEntryCheckOk(long entryId, String status) {
+        writer.submit(() -> {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "UPDATE entry SET last_checked_at = ?, last_check_status = ?, " +
+                    "last_check_error = NULL, last_tls_issuer = NULL WHERE id = ?")) {
+                ps.setLong(1, System.currentTimeMillis());
+                ps.setString(2, status);
+                ps.setLong(3, entryId);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new IllegalStateException("更新检查状态失败", e);
+            }
+        });
+    }
+
+    /**
+     * 记录一次检查失败。
+     *
+     * <p>同时更新 {@code last_checked_at}：失败也是一次真实的检查。
+     * 若只写错误而不更新时间，界面会显示"从未检查"并附一条失败原因，
+     * 自相矛盾，也会让人怀疑数据不准。
+     *
+     * @param entryId   条目
+     * @param status    结局标记（通常为 ERROR）
+     * @param message   给人看的原因
+     * @param tlsIssuer TLS 不受信任时的证书签发者；非 TLS 失败传 null
+     */
+    public void updateEntryCheckFailed(long entryId, String status, String message, String tlsIssuer) {
+        writer.submit(() -> {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "UPDATE entry SET last_checked_at = ?, last_check_status = ?, " +
+                    "last_check_error = ?, last_tls_issuer = ? WHERE id = ?")) {
+                ps.setLong(1, System.currentTimeMillis());
+                ps.setString(2, status);
+                ps.setString(3, message);
+                ps.setString(4, tlsIssuer);
+                ps.setLong(5, entryId);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new IllegalStateException("记录检查失败状态失败", e);
             }
         });
     }
@@ -744,7 +797,10 @@ public final class SqliteStore implements AutoCloseable {
                 rs.getString("last_seen_tag"),
                 rs.getString("last_etag"),
                 checkedAt == null ? null : ((Number) checkedAt).longValue(),
-                rs.getLong("created_at")
+                rs.getLong("created_at"),
+                rs.getString("last_check_status"),
+                rs.getString("last_check_error"),
+                rs.getString("last_tls_issuer")
         );
     }
 

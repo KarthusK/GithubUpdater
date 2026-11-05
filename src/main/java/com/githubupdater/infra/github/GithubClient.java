@@ -49,6 +49,14 @@ public final class GithubClient {
     private final java.util.concurrent.ExecutorService executor;
 
     public GithubClient(java.util.function.Supplier<String> tokenSupplier) {
+        this(tokenSupplier, null);
+    }
+
+    /**
+     * @param tokenSupplier PAT 供应器
+     * @param ssl           自定义 SSLContext（含用户配置的额外 CA）；为 null 用默认
+     */
+    public GithubClient(java.util.function.Supplier<String> tokenSupplier, javax.net.ssl.SSLContext ssl) {
         this.tokenSupplier = tokenSupplier;
         this.mapper = new ObjectMapper();
 
@@ -69,13 +77,17 @@ public final class GithubClient {
             return t;
         });
 
-        this.http = HttpClient.newBuilder()
+        var builder = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(CONNECT_TIMEOUT)
                 // 跟随 302，但下载不经此客户端，这里只有 API 调用
                 .followRedirects(HttpClient.Redirect.NORMAL)
-                .executor(executor)
-                .build();
+                .executor(executor);
+        // 只有配置了自定义 CA 才覆盖 SSLContext；否则让 HttpClient 用平台默认
+        if (ssl != null) {
+            builder.sslContext(ssl);
+        }
+        this.http = builder.build();
     }
 
     /**
@@ -93,7 +105,13 @@ public final class GithubClient {
     }
 
     /** 失败，带上可映射到 API 错误码的分类。 */
-    public record Failed(Kind kind, int statusCode, String message, Quota quota) implements Result {
+    public record Failed(Kind kind, int statusCode, String message, Quota quota,
+                         com.githubupdater.infra.http.TlsDiagnostics.Diagnosis tls) implements Result {
+
+        /** 不含 TLS 诊断信息的失败。 */
+        public Failed(Kind kind, int statusCode, String message, Quota quota) {
+            this(kind, statusCode, message, quota, null);
+        }
 
         public enum Kind {
             /** 401：token 无效或过期。 */
@@ -102,6 +120,22 @@ public final class GithubClient {
             RATE_LIMITED,
             /** 404：仓库不存在，或私有库无权限。 */
             NOT_FOUND,
+            /**
+             * TLS 证书链不受信任。
+             *
+             * <p>与被劫持是同一件事的两面：本机加速器/企业网关解密 HTTPS 后
+             * 用自己的 CA 重签，而 Java 不信任那张 CA。必须单独分类，
+             * 否则它会被当成普通网络故障，用户永远不知道该去关掉哪个软件。
+             */
+            TLS_UNTRUSTED,
+            /**
+             * 证书与主机名不匹配。
+             *
+             * <p>根因通常同上（代理重签时没用对域名），但错误信息形如
+             * {@code No name matching api.github.com found}，看起来像 DNS 故障。
+             * 单独分类才能给出正确指引。
+             */
+            TLS_HOSTNAME_MISMATCH,
             /** 网络层失败（超时、DNS、连接被拒）。 */
             NETWORK,
             /** 其它。 */
@@ -162,6 +196,21 @@ public final class GithubClient {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            // 证书不受信任 / 主机名不匹配都要单独归类，并去抓签发者——否则用户看到的
+            // 只是一句"PKIX path building failed"或"No name matching"，既不知道
+            // 被谁劫持也不知道怎么修。后者尤其像 DNS 问题，其实与 DNS 无关。
+            if (com.githubupdater.infra.http.TlsDiagnostics.isTlsCertificateProblem(e)) {
+                boolean mismatch =
+                        com.githubupdater.infra.http.TlsDiagnostics.isHostnameMismatch(e);
+                var diagnosis = diagnoseTls(url);
+                log.warn("TLS 证书问题 {}（{}；签发者：{}）", url,
+                        mismatch ? "主机名不匹配" : "证书链不受信任",
+                        diagnosis.map(com.githubupdater.infra.http.TlsDiagnostics.Diagnosis::issuer)
+                                .orElse("未能识别"));
+                return new Failed(mismatch ? Failed.Kind.TLS_HOSTNAME_MISMATCH
+                                : Failed.Kind.TLS_UNTRUSTED,
+                        0, e.getMessage(), Quota.unknown(hasToken()), diagnosis.orElse(null));
+            }
             log.warn("GitHub API 请求失败 {}: {}", url, e.getMessage());
             return new Failed(Failed.Kind.NETWORK, 0, e.getMessage(), Quota.unknown(hasToken()));
         }
@@ -193,6 +242,24 @@ public final class GithubClient {
                     resp.headers().firstValue("ETag").orElse(null));
         } catch (IOException e) {
             return new Failed(Failed.Kind.OTHER, status, "响应解析失败: " + e.getMessage(), quota);
+        }
+    }
+
+    /**
+     * 从请求 URL 里取出 host 与 port，去抓对端证书的签发者。
+     *
+     * <p>诊断是可选的附加值：拿不到就返回 empty，调用方按"原因未知"处理，
+     * 不影响失败本身的分类。
+     */
+    private static Optional<com.githubupdater.infra.http.TlsDiagnostics.Diagnosis> diagnoseTls(String url) {
+        try {
+            URI uri = URI.create(url);
+            String host = uri.getHost();
+            int port = uri.getPort() > 0 ? uri.getPort() : 443;
+            return com.githubupdater.infra.http.TlsDiagnostics.probe(host, port);
+        } catch (RuntimeException e) {
+            log.debug("解析 URL 以诊断 TLS 失败：{}", e.getMessage());
+            return Optional.empty();
         }
     }
 

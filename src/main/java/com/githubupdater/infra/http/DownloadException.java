@@ -8,6 +8,13 @@ public final class DownloadException extends Exception {
     public enum Kind {
         /** 网络层失败（超时、DNS、连接重置）。可重试。 */
         NETWORK,
+        /**
+         * TLS 证书链不受信任。
+         *
+         * <p>通常是本机加速器/企业网关在解密 HTTPS。重试没有意义——
+         * 必须先去设置里配对应 CA，所以不可重试。
+         */
+        TLS_UNTRUSTED,
         /** HTTP 4xx。多数不可重试，但 408/429 可以。 */
         HTTP_CLIENT,
         /** HTTP 5xx。可重试。 */
@@ -59,6 +66,7 @@ public final class DownloadException extends Exception {
             case NETWORK, HTTP_SERVER -> true;
             // 429 是限流，等待后可重试
             case HTTP_CLIENT -> statusCode == 408 || statusCode == 429;
+            // TLS_UNTRUSTED 明确不可重试：同样的证书链再试一次还是失败
             default -> false;
         };
     }

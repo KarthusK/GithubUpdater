@@ -18,7 +18,7 @@ public final class Migrations {
     }
 
     /** 当前代码支持的最新 schema 版本。 */
-    public static final int LATEST_VERSION = 1;
+    public static final int LATEST_VERSION = 2;
 
     public static final List<Migration> ALL = List.of(
             new Migration(1, "初始 schema", List.of(
@@ -118,6 +118,18 @@ public final class Migrations {
                         value TEXT NOT NULL
                     )
                     """
+            )),
+
+            new Migration(2, "记录最近一次检查的结局与失败原因", List.of(
+                    // 为什么要落库而不是只在界面上闪一条 toast：
+                    // 检查失败后用户往往会去处理代理/网络，然后刷新页面再看——
+                    // 如果失败原因只存在内存里，刷新后就只剩"从未检查"或
+                    // "刚刚检查过"而看不到任何原因，等于把线索抹掉了。
+                    "ALTER TABLE entry ADD COLUMN last_check_status TEXT",
+                    "ALTER TABLE entry ADD COLUMN last_check_error  TEXT",
+                    // 单独存 TLS 签发者：界面要据此判断"这是中间人劫持"而不是
+                    // 普通网络故障，两者给的引导完全不同。
+                    "ALTER TABLE entry ADD COLUMN last_tls_issuer   TEXT"
             ))
     );
 

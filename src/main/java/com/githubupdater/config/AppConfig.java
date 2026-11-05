@@ -44,6 +44,20 @@ public final class AppConfig {
     /** BINARY 类保留的备份数量。 */
     public int keepBackups = 2;
 
+    /**
+     * 自定义 CA 证书文件路径。
+     *
+     * <p>用于中间人代理（加速器、企业 TLS 检查网关）环境：本机代理解密 HTTPS 后
+     * 用自己的 CA 重签，而 Java 的默认信任库不认它。
+     *
+     * <p><b>这个证书是"追加"到默认信任链的，不是替换。</b>所以用户关掉代理之后
+     * 即使这个字段还指着旧证书，也仍然能正常访问——这是刻意的设计，
+     * 详见 {@code TlsTrust}。
+     *
+     * <p>相对路径按 {@code data/} 解析；null 表示未配置。
+     */
+    public String customCaFile;
+
     public AppConfig normalized() {
         if (maxParallelTasks < 1) {
             maxParallelTasks = 1;
@@ -66,7 +80,36 @@ public final class AppConfig {
         if (mirrorPrefix == null) {
             mirrorPrefix = "";
         }
+        // 空白统一归 null：否则 "" 会被当成"配置了一个空路径"，
+        // 在界面上显示成"已配置但加载失败"，与"未配置"混淆。
+        if (customCaFile != null) {
+            customCaFile = customCaFile.trim();
+            if (customCaFile.isEmpty()) {
+                customCaFile = null;
+            }
+        }
         return this;
+    }
+
+    /**
+     * 解析自定义 CA 的绝对路径。
+     *
+     * <p>相对路径按 {@code data/} 解析——用户手写 config.json 时写
+     * {@code "customCaFile": "ca.pem"} 应该指向数据目录里的文件，
+     * 而不是进程工作目录（那里可能是任意位置）。
+     *
+     * @param dataDir 数据目录
+     * @return 绝对路径；未配置时返回 null
+     */
+    public java.nio.file.Path resolveCustomCaFile(java.nio.file.Path dataDir) {
+        if (customCaFile == null || customCaFile.isBlank()) {
+            return null;
+        }
+        java.nio.file.Path p = java.nio.file.Path.of(customCaFile);
+        if (p.isAbsolute()) {
+            return p;
+        }
+        return dataDir.resolve(p).toAbsolutePath();
     }
 
     /** 是否配置了 token。界面上只用这个判断，不暴露 token 本身。 */

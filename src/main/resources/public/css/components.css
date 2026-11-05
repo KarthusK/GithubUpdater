@@ -730,6 +730,24 @@
     max-width: 58ch;
 }
 
+/* 带路径的提示。
+   路径可能很长（Windows 绝对路径尤其如此），所以标签与路径分成两行，
+   路径自己独占一行再断行——这样无论路径多长，标签都不会被挤到上一行悬着。
+
+   断行用 overflow-wrap: anywhere 而不是 word-break: break-all：
+   后者会在任意字符处硬断，实测把 "...CA.pem" 断成 "...CA." + "pem"，
+   扩展名被拆开很难读；前者只在真的放不下时才断。 */
+.field-hint--path {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    max-width: 100%;
+}
+
+.field-hint-path {
+    overflow-wrap: anywhere;
+}
+
 .input,
 .select {
     height: var(--h-control);
@@ -1071,6 +1089,77 @@ input[type="radio"]:checked::after {
 .setting-row-control .input--wide {
     width: var(--w-input-wide);
     text-align: left;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   页内提示块（notice）
+
+   与 toast 的分工：toast 是"刚发生了一件事"，几秒后消失；
+   notice 是"有个状态还挂在这里"，需要用户看完再去处理。
+   所以 notice 必须可读、可停留、带操作入口，不能自己消失。
+
+   配色只用 --signal（琥珀 = 需要人处理）与 --danger（红 = 出错了），
+   soft 版本由 base.css 的 color-mix 派生，深浅两套主题都自动跟随，
+   不需要在这里重复定义主题相关的值。
+   ══════════════════════════════════════════════════════════════ */
+
+.notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    margin-bottom: var(--space-5);
+    border: 1px solid var(--line);
+    border-left-width: var(--space-1);
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised);
+}
+
+.notice--warn {
+    border-left-color: var(--signal);
+    background: var(--signal-soft);
+}
+
+.notice--error {
+    border-left-color: var(--danger);
+    background: var(--danger-soft);
+}
+
+.notice-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.notice-title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text);
+    line-height: var(--leading-tight);
+}
+
+.notice-body {
+    font-size: var(--text-xs);
+    color: var(--text-dim);
+    line-height: var(--leading-normal);
+    max-width: 68ch;
+}
+
+/* 证据行：签发者原文。等宽显示，避免被误读成普通描述文字 */
+.notice-detail {
+    font-size: var(--text-xs);
+    color: var(--text-dim);
+    line-height: var(--leading-normal);
+    word-break: break-all;
+}
+
+.notice-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
 }
 
 /* ══════════════════════════════════════════════════════════════

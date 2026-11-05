@@ -58,8 +58,22 @@ public final class CheckService {
             Long releaseId,
             boolean hasUpdate,
             List<String> matchedAssets,
-            String message
+            String message,
+            /**
+             * TLS 不受信任时的证书签发者。
+             *
+             * <p>单独带出来而不是塞进 message：界面要据此区分"这是中间人劫持"
+             * 和"普通网络故障"，两者给的引导完全不同。
+             */
+            String tlsIssuer
     ) {
+
+        /** 不含 TLS 诊断信息的结局。 */
+        public CheckOutcome(long entryId, String fullName, Outcome outcome, String tag,
+                            Long releaseId, boolean hasUpdate, List<String> matchedAssets,
+                            String message) {
+            this(entryId, fullName, outcome, tag, releaseId, hasUpdate, matchedAssets, message, null);
+        }
 
         public enum Outcome {
             /** 出现新 release（id 与上次不同）。 */
@@ -133,7 +147,7 @@ public final class CheckService {
 
             if (result instanceof GithubClient.NotModified nm) {
                 quota.update(nm.quota());
-                store.touchEntryCheckedAt(entry.id());
+                store.updateEntryCheckOk(entry.id(), "NO_CHANGE");
                 // 304 时拿不到资产清单，但规则可能已在缓存里匹配过。
                 // 这里仍尝试用上次记录的 tag 匹配一次，避免界面在 304 后丢失已匹配结果。
                 List<String> cached = matchAssetsForTag(entry, entry.lastSeenTag());
@@ -145,9 +159,17 @@ public final class CheckService {
             if (result instanceof GithubClient.Failed failed) {
                 quota.update(failed.quota());
                 log.warn("检查 {} 失败：{} ({})", entry.fullName(), failed.message(), failed.kind());
+
+                String message = describeFailure(failed);
+                String tlsIssuer = failed.tls() == null ? null : failed.tls().issuer();
+                // 失败原因必须落库：用户通常会去处理代理/网络再刷新页面回来看，
+                // 只存在内存里的话刷新后就什么都看不到了。
+                store.updateEntryCheckFailed(entry.id(),
+                        CheckOutcome.Outcome.ERROR.name(), message, tlsIssuer);
+
                 return new CheckOutcome(entry.id(), entry.fullName(),
                         CheckOutcome.Outcome.ERROR, null, null, false, List.of(),
-                        describeFailure(failed));
+                        message, tlsIssuer);
             }
 
             GithubClient.Ok ok = (GithubClient.Ok) result;
@@ -155,7 +177,7 @@ public final class CheckService {
 
             Optional<ReleaseDto.Release> target = pickRelease(entry, ok);
             if (target.isEmpty()) {
-                store.touchEntryCheckedAt(entry.id());
+                store.updateEntryCheckOk(entry.id(), "NO_CHANGE");
                 return new CheckOutcome(entry.id(), entry.fullName(),
                         CheckOutcome.Outcome.NO_CHANGE, null, null, false, List.of(),
                         "未找到符合条件的 release");
@@ -167,6 +189,8 @@ public final class CheckService {
             // 匹配资产：无论是否新版本都要算，否则界面在"无更新"时看不到可用资产
             List<String> matched = matchAssets(entry, release);
 
+            // 成功路径也要记录结局，并清掉上一次的失败信息
+            store.updateEntryCheckOk(entry.id(), hasUpdate ? "UPDATED" : "NO_CHANGE");
             store.updateEntryChecked(entry.id(), release.id(), release.tagName(), ok.etag());
 
             log.info("检查 {} -> {} (id={}) 新版本={} 匹配资产={}",
@@ -262,14 +286,62 @@ public final class CheckService {
         return result;
     }
 
+    /**
+     * 把失败分类翻成用户能照着做的一句话。
+     *
+     * <p>{@code TLS_UNTRUSTED} 是这里最需要小心的一条：它的根因几乎总是
+     * "本机有中间人代理"，而不是 GitHub 或这个工具的问题。文案必须
+     * 说清三件事——发生了什么、可能是什么软件、去哪里修，
+     * 否则用户只会看到"证书错误"然后去搜索与问题无关的东西。
+     */
     private static String describeFailure(GithubClient.Failed failed) {
         return switch (failed.kind()) {
             case AUTH_FAILED -> "token 无效或过期，请在设置中重新填写";
             case RATE_LIMITED -> failed.message();
             case NOT_FOUND -> "仓库不存在，或私有库缺少权限";
+            case TLS_UNTRUSTED -> describeTlsFailure(failed, false);
+            case TLS_HOSTNAME_MISMATCH -> describeTlsFailure(failed, true);
             case NETWORK -> "网络请求失败：" + failed.message();
             case OTHER -> "请求失败 (" + failed.statusCode() + ")：" + failed.message();
         };
+    }
+
+    /**
+     * TLS 证书问题的完整说明。
+     *
+     * <p>分两层：一句话结论 + 具体证据（签发者）+ 操作指引。
+     * 拿不到签发者时也要说清"检测不到具体来源"，而不是假装知道。
+     *
+     * @param failed     失败结果
+     * @param hostnameMismatch true 表示是主机名不匹配（不是链不受信任）
+     */
+    private static String describeTlsFailure(GithubClient.Failed failed, boolean hostnameMismatch) {
+        var tls = failed.tls();
+        StringBuilder sb = new StringBuilder();
+
+        if (hostnameMismatch) {
+            // 这条错误原文是 "No name matching api.github.com found"，
+            // 很容易被当成 DNS 问题。必须主动说清它跟 DNS 无关。
+            sb.append("证书与该域名不匹配，说明本机代理重签证书时没用对域名")
+                    .append("（这不是 DNS 故障）");
+        } else {
+            sb.append("TLS 证书链不受信任，检测到本机有中间人在解密 HTTPS");
+        }
+
+        if (tls != null) {
+            sb.append("。签发者：").append(tls.issuer());
+            if (tls.selfSigned()) {
+                sb.append("（自签名根证书，属于本机代理而非 GitHub）");
+            }
+            if (tls.hint() != null && !tls.hint().isBlank()) {
+                sb.append("。").append(tls.hint());
+            }
+        } else {
+            sb.append("（未能识别签发者，可能是代理未运行或已拒绝连接）");
+        }
+
+        sb.append("。请关闭该软件，或在 设置 → 网络与证书 里填入它的 CA 证书文件。");
+        return sb.toString();
     }
 
     private static void sleepQuietly(long ms) {

@@ -69,14 +69,24 @@ public final class Main {
             return;
         }
 
-        GithubClient github = new GithubClient(() -> config.githubToken);
+        // 自定义 CA（中间人代理环境）。加载失败只告警不阻断启动——
+        // 证书配错属于用户配置问题，不该让整个程序起不来。
+        Path customCaPath = config.resolveCustomCaFile(dataDir);
+        com.githubupdater.infra.http.TlsTrust.Outcome tlsTrust =
+                com.githubupdater.infra.http.TlsTrust.fromFile(customCaPath);
+        if (tlsTrust.isFailure()) {
+            log.warn("自定义 CA 配置无效：{}（将使用系统默认信任库）", tlsTrust.detail());
+        }
+        javax.net.ssl.SSLContext sslContext = tlsTrust.context();
+
+        GithubClient github = new GithubClient(() -> config.githubToken, sslContext);
         QuotaService quota = new QuotaService(config);
         CheckService checkService = new CheckService(store, github, quota);
 
         // 下载器：全局限速器由配置驱动（0 表示不限速）
         RateLimiter rateLimiter = new RateLimiter(
                 config.globalRateLimitKBps > 0 ? config.globalRateLimitKBps * 1024L : 0);
-        HttpFetcher fetcher = new HttpFetcher(rateLimiter);
+        HttpFetcher fetcher = new HttpFetcher(rateLimiter, sslContext);
         DownloadService downloadService = new DownloadService(store, fetcher, rateLimiter, config);
         ApplyService applyService = new ApplyService(store, config);
 
@@ -85,7 +95,7 @@ public final class Main {
         com.githubupdater.infra.git.GitRunner.configureUserConfig(dataDir);
 
         WebServer server = new WebServer(store, config, configStore, github, quota,
-                checkService, downloadService, applyService);
+                checkService, downloadService, applyService, tlsTrust, dataDir, customCaPath);
         server.start();
 
         // 端口由系统分配，必须落盘——否则用户关掉日志窗口就再也找不到面板地址

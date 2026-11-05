@@ -17,6 +17,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** SQLite 存储层测试，含迁移与外键约束。 */
@@ -198,5 +199,85 @@ class SqliteStoreTest {
         boolean hasWal = Files.list(tempDir)
                 .anyMatch(p -> p.getFileName().toString().contains("-wal"));
         assertTrue(hasWal, "WAL 模式下写入后应产生 -wal 文件");
+    }
+
+    // ── v2：检查失败状态 ────────────────────────────────
+
+    @Test
+    @DisplayName("记录检查失败时应落库原因、签发者，并同时更新检查时间")
+    void recordsCheckFailure() throws Exception {
+        long id = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        store.flush();
+
+        store.updateEntryCheckFailed(id, "ERROR",
+                "TLS 证书链不受信任，检测到本机有中间人在解密 HTTPS",
+                "CN=steamcommunity.com, O=Steamcommunity302, C=CN");
+        store.flush();
+
+        Entry e = store.findEntry(id).orElseThrow();
+        assertEquals("ERROR", e.lastCheckStatus());
+        assertTrue(e.lastCheckError().contains("中间人"), "失败原因应完整保留");
+        assertEquals("CN=steamcommunity.com, O=Steamcommunity302, C=CN", e.lastTlsIssuer());
+        // 关键：失败也是一次真实的检查。若这里为 null，界面会显示"从未检查"
+        // 却同时显示一条失败原因，自相矛盾。
+        assertNotNull(e.lastCheckedAt(), "失败也必须更新 last_checked_at");
+        assertNull(e.lastSeenReleaseId(), "失败不应写入 release id");
+    }
+
+    @Test
+    @DisplayName("检查成功后应清掉上一次的失败信息")
+    void clearsFailureOnSuccess() throws Exception {
+        long id = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        store.updateEntryCheckFailed(id, "ERROR", "网络请求失败", "CN=某中间人");
+        store.flush();
+
+        assertEquals("ERROR", store.findEntry(id).orElseThrow().lastCheckStatus());
+
+        store.updateEntryCheckOk(id, "OK");
+        store.flush();
+
+        Entry e = store.findEntry(id).orElseThrow();
+        assertEquals("OK", e.lastCheckStatus());
+        // 清空是必须的：否则用户修好网络后重新检查成功，
+        // 界面还挂着上一次的失败原因，会让人以为问题没解决。
+        assertNull(e.lastCheckError(), "成功后必须清掉旧的失败原因");
+        assertNull(e.lastTlsIssuer(), "成功后必须清掉旧的签发者");
+        assertNotNull(e.lastCheckedAt());
+    }
+
+    @Test
+    @DisplayName("v1 数据库应能迁移到 v2，且原有数据不丢")
+    void migratesFromV1() throws Exception {
+        store.close();
+        Files.deleteIfExists(tempDir.resolve("state.db"));
+        Files.deleteIfExists(tempDir.resolve("state.db-wal"));
+        Files.deleteIfExists(tempDir.resolve("state.db-shm"));
+
+        // 手工造一个 v1 库：只跑第一个迁移，写入数据，再交给 SqliteStore 升级
+        Path dbPath = tempDir.resolve("state.db");
+        try (var conn = java.sql.DriverManager.getConnection(
+                "jdbc:sqlite:" + dbPath.toAbsolutePath())) {
+            try (var st = conn.createStatement()) {
+                st.execute("PRAGMA foreign_keys = ON");
+                for (String sql : Migrations.ALL.get(0).statements()) {
+                    st.execute(sql);
+                }
+                st.execute("INSERT INTO app_meta(key, value) VALUES('schemaVersion', '1')");
+                st.execute("INSERT INTO entry(owner, repo, channel, display_name, is_private, "
+                        + "created_at) VALUES('old','repo','latest','old/repo',0, 111)");
+            }
+        }
+
+        store = SqliteStore.open(tempDir);
+
+        assertEquals(String.valueOf(Migrations.LATEST_VERSION),
+                store.getMeta("schemaVersion").orElseThrow());
+        var entries = store.listEntries();
+        assertEquals(1, entries.size(), "迁移不应丢数据");
+        Entry e = entries.get(0);
+        assertEquals("old", e.owner());
+        // 新增列在旧数据上是 null，语义正好是"从未记录过失败"
+        assertNull(e.lastCheckStatus());
+        assertNull(e.lastTlsIssuer());
     }
 }

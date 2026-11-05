@@ -17,7 +17,18 @@ public record Entry(
         String lastSeenTag,
         String lastEtag,
         Long lastCheckedAt,
-        long createdAt
+        long createdAt,
+        /** 最近一次检查的结局：OK / NO_CHANGE / ERROR 等；从未检查为 null。 */
+        String lastCheckStatus,
+        /** 最近一次检查失败的原因，给人看的一句话；成功时为 null。 */
+        String lastCheckError,
+        /**
+         * TLS 不受信任时的证书签发者。
+         *
+         * <p>非空即意味着"这台机器上有中间人在解密 HTTPS"。界面据此显示
+         * 专门的诊断引导，而不是把它当成普通网络故障——两者的处理方式完全不同。
+         */
+        String lastTlsIssuer
 ) {
 
     public static final String CHANNEL_LATEST = "latest";

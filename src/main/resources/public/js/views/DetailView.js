@@ -22,9 +22,10 @@ import { Menu } from '../components/Menu.js';
 import { VersionRail } from '../components/VersionRail.js';
 import { ProgressBar } from '../components/ProgressBar.js';
 import { confirmAsync } from '../components/confirm.js';
+import { TlsBanner } from '../components/TlsBanner.js';
 import {
     formatDate, formatRelative,
-    stateBadgeClass, stateLabel, kindLabel,
+    stateBadgeClass, stateLabel, kindLabel, isMitmFailure,
 } from '../format.js';
 
 export function DetailView() {
@@ -35,6 +36,8 @@ export function DetailView() {
     const [detail, setDetail] = useState(null);
     const [rules, setRules] = useState([]);
     const [loading, setLoading] = useState(true);
+    /** 自定义 CA 状态：诊断横幅要据此决定"还提不提"。 @type {any} */
+    const [customCa, setCustomCa] = useState(null);
 
     const entry = entries.find(e => e.id === entryId);
 
@@ -47,6 +50,14 @@ export function DetailView() {
             ]);
             setDetail(d);
             setRules(r.rules || []);
+            // CA 状态决定诊断横幅是否还要显示。单独取、失败不影响主内容——
+            // 设置接口挂了不该让详情页白屏。
+            try {
+                const s = await api.getSettings();
+                setCustomCa(s && s.customCa);
+            } catch (e) {
+                setCustomCa(null);
+            }
         } catch (e) {
             toastError(e);
         } finally {
@@ -69,7 +80,20 @@ export function DetailView() {
     const onCheck = useCallback(async () => {
         try {
             const r = await api.checkOne(entryId);
-            toast(`检查完成：${r.outcome}${r.tag ? ' → ' + r.tag : ''}`);
+            // 失败时必须显示后端给的原因，而不是只报一个 "ERROR" 枚举值。
+            // 那句原因是后端结合证书签发者拼出来的，是用户唯一能照着做的线索。
+            if (r.outcome === 'ERROR') {
+                toast(r.message || '检查失败', 'error');
+            } else {
+                toast(`检查完成：${r.outcome}${r.tag ? ' → ' + r.tag : ''}`);
+            }
+            // 先让 store 知道这次的失败状态，诊断横幅才能立刻出现
+            store.patchEntry(entryId, {
+                lastCheckStatus: r.lastCheckStatus || r.outcome,
+                lastCheckError: r.lastCheckError || '',
+                lastTlsIssuer: r.lastTlsIssuer || '',
+                lastCheckedAt: Date.now(),
+            });
             reload();
         } catch (e) {
             toastError(e);
@@ -162,6 +186,8 @@ export function DetailView() {
                 upstreamTag=${entryData.lastSeenTag || ''}
                 hasUpdate=${updated}
             />
+
+            ${renderCheckFailure(entryData, customCa)}
 
             <section class="section">
                 <div class="section-head">
@@ -262,8 +288,39 @@ function EntriesOverview() {
     `;
 }
 
-function channelLabel(channel) {
-    if (!channel) return '最新正式版';
+/**
+ * 检查失败的展示。
+ *
+ * 分两条路，因为用户要做的事完全不同：
+ *   · 中间人劫持 → 专用横幅，告诉他去配 CA 或关掉代理
+ *   · 其它失败（断网、404、限流）→ 一行通用提示，不误导他去翻代理设置
+ *
+ * 失败原因来自数据库（last_check_error），所以刷新页面后仍然在——
+ * 这正是把状态落库的理由：用户去处理问题再回来，线索不能消失。
+ *
+ * @param {any} entry
+ * @param {any} customCa
+ */
+function renderCheckFailure(entry, customCa) {
+    if (!entry || entry.lastCheckStatus !== 'ERROR') return null;
+
+    // 中间人用专门的横幅，这里不再重复一遍
+    if (isMitmFailure(entry)) {
+        return html`<${TlsBanner} entry=${entry} customCa=${customCa} />`;
+    }
+
+    const reason = entry.lastCheckError || '检查失败，原因未知';
+    return html`
+        <div class="notice notice--error" role="status">
+            <div class="notice-main">
+                <div class="notice-title">上次检查失败</div>
+                <div class="notice-body">${reason}</div>
+            </div>
+        </div>
+    `;
+}
+
+function channelLabel(channel) {    if (!channel) return '最新正式版';
     if (channel === 'latest') return '最新正式版';
     if (channel === 'prerelease') return '含预发布';
     if (channel.startsWith('tag:')) return `固定 tag：${channel.slice(4)}`;

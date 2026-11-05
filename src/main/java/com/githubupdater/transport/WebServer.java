@@ -80,6 +80,21 @@ public final class WebServer {
     private final ApplyService applyService;
     private final SseHub sse;
 
+    /** 启动时实际生效的自定义 CA 状态。改配置后需重启才更新。 */
+    private final com.githubupdater.infra.http.TlsTrust.Outcome tlsTrust;
+
+    /** 数据目录。用于解析自定义 CA 的相对路径。 */
+    private final Path dataDir;
+
+    /**
+     * 启动时实际尝试加载的 CA 路径。
+     *
+     * <p>用它和当前配置比较，才能判断"改了配置但没重启"。
+     * 注意即使加载失败也要记下来：那时状态已经是失败，没有这个基准
+     * 就分不清"配置没变"和"改了但没生效"。
+     */
+    private final Path startupCaPath;
+
     private final String token;
 
     /** 检查是长操作，必须放在独立线程，不能占用 HTTP 工作线程。 */
@@ -94,7 +109,9 @@ public final class WebServer {
 
     public WebServer(SqliteStore store, AppConfig config, ConfigStore configStore,
                      GithubClient github, QuotaService quota, CheckService checkService,
-                     DownloadService downloadService, ApplyService applyService) {
+                     DownloadService downloadService, ApplyService applyService,
+                     com.githubupdater.infra.http.TlsTrust.Outcome tlsTrust, Path dataDir,
+                     Path startupCaPath) {
         this.store = store;
         this.config = config;
         this.configStore = configStore;
@@ -103,6 +120,9 @@ public final class WebServer {
         this.checkService = checkService;
         this.downloadService = downloadService;
         this.applyService = applyService;
+        this.tlsTrust = tlsTrust;
+        this.dataDir = dataDir;
+        this.startupCaPath = startupCaPath;
         this.sse = new SseHub();
         this.token = generateToken();
 
@@ -492,7 +512,10 @@ public final class WebServer {
                                 "releaseId", outcome.releaseId() == null ? 0 : outcome.releaseId(),
                                 "hasUpdate", outcome.hasUpdate(),
                                 "lastCheckedAt", System.currentTimeMillis(),
-                                "message", outcome.message() == null ? "" : outcome.message()
+                                "message", outcome.message() == null ? "" : outcome.message(),
+                                "lastCheckStatus", outcome.outcome().name(),
+                                "lastCheckError", outcome.message() == null ? "" : outcome.message(),
+                                "lastTlsIssuer", outcome.tlsIssuer() == null ? "" : outcome.tlsIssuer()
                         )));
                 log.info("批量检查结束：检查 {} 条，跳过 {} 条",
                         result.checked(), result.skipped());
@@ -527,6 +550,10 @@ public final class WebServer {
         data.put("hasUpdate", outcome.hasUpdate());
         data.put("matchedAssets", outcome.matchedAssets());
         data.put("message", outcome.message() == null ? "" : outcome.message());
+        // 检查失败时界面要立刻能显示诊断，不能等下一次刷新
+        data.put("lastCheckStatus", outcome.outcome().name());
+        data.put("lastCheckError", outcome.message() == null ? "" : outcome.message());
+        data.put("lastTlsIssuer", outcome.tlsIssuer() == null ? "" : outcome.tlsIssuer());
         ctx.json(ok(data));
     }
 
@@ -1119,6 +1146,7 @@ public final class WebServer {
         data.put("autoStart", autoStartEnabled);
         data.put("autoStartSupported", autoStartSupported);
         data.put("keepBackups", config.keepBackups);
+        data.put("customCa", customCaView());
         data.put("schemaVersion", config.schemaVersion);
         data.put("version", "0.1.0");
         data.put("mirrorPresets", List.of(
@@ -1129,8 +1157,34 @@ public final class WebServer {
         ctx.json(ok(data));
     }
 
-    private static Map<String, String> mirrorPreset(String name, String prefix) {
-        Map<String, String> m = new LinkedHashMap<>();
+    /**
+     * 自定义 CA 的状态视图。
+     *
+     * <p>{@code status} 反映的是<b>启动时</b>实际加载的结果，不是当前配置里写的值。
+     * 两者可能不一致（用户改了路径但没重启），所以另给 {@code requiresRestart}，
+     * 让界面能明确说"要重启才生效"，而不是让用户以为已经生效了却没效果。
+     */
+    private Map<String, Object> customCaView() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("file", config.customCaFile == null ? "" : config.customCaFile);
+        m.put("status", tlsTrust.status().name());
+        m.put("certCount", tlsTrust.certCount());
+        m.put("detail", tlsTrust.detail() == null ? "" : tlsTrust.detail());
+        m.put("active", tlsTrust.isLoaded());
+
+        // 配置里的路径与启动时加载的路径不一致 → 需要重启
+        boolean requiresRestart = false;
+        try {
+            Path configured = config.resolveCustomCaFile(dataDir);
+            requiresRestart = configured != null && !configured.equals(startupCaPath);
+        } catch (RuntimeException e) {
+            requiresRestart = true;
+        }
+        m.put("requiresRestart", requiresRestart);
+        return m;
+    }
+
+    private static Map<String, String> mirrorPreset(String name, String prefix) {        Map<String, String> m = new LinkedHashMap<>();
         m.put("name", name);
         m.put("prefix", prefix);
         return m;
@@ -1162,6 +1216,36 @@ public final class WebServer {
             config.anonymousCheckBatchLimit = n.intValue();
         }
 
+        // 自定义 CA：保存前先真的试读一次。
+        //
+        // 不校验就存下去的话，用户会得到一个"看起来配好了"的界面，
+        // 直到重启后才发现根本加载不了——那时他已经想不起来是路径写错了还是证书选错了。
+        if (body.containsKey("customCaFile")) {
+            String raw = str(body.get("customCaFile"));
+            String trimmed = raw == null ? "" : raw.trim();
+
+            if (trimmed.isEmpty()) {
+                config.customCaFile = null;
+            } else {
+                Path candidate;
+                try {
+                    candidate = Path.of(trimmed).isAbsolute()
+                            ? Path.of(trimmed)
+                            : dataDir.resolve(trimmed).toAbsolutePath();
+                } catch (RuntimeException e) {
+                    ctx.status(400).json(error("VALIDATION_FAILED",
+                            "CA 证书路径格式非法：" + e.getMessage()));
+                    return;
+                }
+                var probe = com.githubupdater.infra.http.TlsTrust.fromFile(candidate);
+                if (!probe.isLoaded()) {
+                    ctx.status(400).json(error("VALIDATION_FAILED", probe.detail()));
+                    return;
+                }
+                config.customCaFile = trimmed;
+            }
+        }
+
         // 开机自启：同时改配置与注册表。
         //
         // 注意不是"改配置就好"——注册表才是自启的真实开关，
@@ -1181,6 +1265,7 @@ public final class WebServer {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("saved", true);
         data.put("githubTokenConfigured", config.hasToken());
+        data.put("customCa", customCaView());
         ctx.json(ok(data));
     }
 
@@ -1218,6 +1303,11 @@ public final class WebServer {
         m.put("lastSeenTag", e.lastSeenTag() == null ? "" : e.lastSeenTag());
         m.put("lastCheckedAt", e.lastCheckedAt() == null ? 0 : e.lastCheckedAt());
         m.put("ruleCount", countRulesQuietly(e.id()));
+        // 最近一次检查的结局与原因。hasUpdate 只在当次会话的有效期内存在，
+        // 而这两个字段是持久化的——刷新页面后用户仍能看到"上次为什么失败"。
+        m.put("lastCheckStatus", e.lastCheckStatus() == null ? "" : e.lastCheckStatus());
+        m.put("lastCheckError", e.lastCheckError() == null ? "" : e.lastCheckError());
+        m.put("lastTlsIssuer", e.lastTlsIssuer() == null ? "" : e.lastTlsIssuer());
         return m;
     }
 

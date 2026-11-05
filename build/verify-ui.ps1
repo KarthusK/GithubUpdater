@@ -206,6 +206,29 @@ Check '设置分节数 ≥ 6' ($sections -ge 6)
 Check '不再使用卡片' (Eval 'document.querySelectorAll(".card").length') 0
 Check '未出现「-1/」' (Eval 'document.body.innerText.includes("-1/")') $false
 
+# 「网络与证书」：中间人环境下用户唯一的出路，不能悄悄消失。
+# 只断言文字存在是不够的——样式表被改坏时文字照样在，
+# 所以同时验证语义类名与实际计算样式。
+Check '存在「网络与证书」分节' (Eval 'document.body.innerText.includes("网络与证书")')
+Check '存在 CA 证书输入框' (Eval 'document.querySelectorAll("#ca-input").length') 1
+Check '说明里点明只影响本程序' (Eval 'document.body.innerText.includes("只影响本程序")')
+# 用户最担心的是"配了会不会污染系统"，所以"追加"必须写在界面上
+Check '说明里点明是追加而非替换' (Eval 'document.body.innerText.includes("追加")')
+
+# notice 样式必须真的生效：TlsBanner 与检查失败提示都靠它。
+# 用计算样式验证，比断言类名更接近"用户到底看到什么"。
+Check 'notice 样式已加载' (Eval @"
+(() => {
+  const el = document.createElement('div');
+  el.className = 'notice notice--warn';
+  document.body.appendChild(el);
+  const s = getComputedStyle(el);
+  const ok = s.display === 'flex' && parseFloat(s.paddingTop) > 0;
+  el.remove();
+  return ok;
+})()
+"@) $true
+
 # 「启动」区块：复选框与标题行的垂直中心必须重合。
 #
 # 这里曾经用写死的 margin-top: 2px 对齐，而实际需要 1.4px，勾选框整体

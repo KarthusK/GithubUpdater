@@ -6,7 +6,7 @@ GithubUpdater：Windows 上的 GitHub 软件版本跟踪与下载工具。常驻
 
 **已实测通过的门槛**：**打包产物空载 77.2MB、跑完完整流程后稳态 119.6MB**。**阈值 150MB**（2026-11-02 由 120MB 放宽，见 [`docs/07-验收与风险.md`](docs/07-验收与风险.md) 的变更记录）。
 
-**测试**：`mvn test` → **143 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
+**测试**：`mvn test` → **168 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
 
 **发布产物**：`build/GithubUpdater-0.1.0-win-x64.zip`，**59.5 MB**，解压即用，无需安装 Java。
 
@@ -26,7 +26,7 @@ GithubUpdater：Windows 上的 GitHub 软件版本跟踪与下载工具。常驻
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/01-架构设计.md`](docs/01-架构设计.md) | 进程模型、模块划分、10 条 ADR |
+| [`docs/01-架构设计.md`](docs/01-架构设计.md) | 进程模型、模块划分、11 条 ADR |
 | [`docs/02-数据库设计.md`](docs/02-数据库设计.md) | 6 张表 DDL、PRAGMA、迁移策略 |
 | [`docs/03-API接口.md`](docs/03-API接口.md) | REST 端点、SSE 事件、错误码、安全模型 |
 | [`docs/04-后端设计.md`](docs/04-后端设计.md) | 四个服务的实现逻辑、并发模型 |
@@ -55,7 +55,7 @@ mvn -v                              # 自检：必须显示 Maven 3.10.0 + Java 
 .\run.ps1 -Minimized                # 静默启动（不自动开浏览器）
 
 mvn -DskipTests package             # 编译 + 打包 → target/github-updater.jar
-mvn test                            # 跑全部单元测试（当前 143 个）
+mvn test                            # 跑全部单元测试（当前 168 个）
 mvn test -Dtest=AssetMatcherTest    # 跑单个测试类
 
 pwsh build/run-dev.ps1              # 启动 daemon（run.ps1 用等价参数，二选一）
@@ -230,6 +230,18 @@ pwsh build/package.ps1 -Zip         # 追加生成发布用 zip
 
 - **`PKIX path building failed` 通常不是代码问题，是中间人代理**：某些加速器/代理会解密 HTTPS 并用自己的根证书重签。Windows 信任它（PowerShell 正常），但 Java 用自己的 cacerts 不信任，故握手失败。**排查方法**：用 `SslStream` 读服务器实际证书，看 `Issuer` 是不是正常 CA（正常应为 Sectigo/DigiCert 等）。关掉代理后即可恢复。
 - **不要为了绕过它而把第三方根证书导入 JDK 全局 cacerts**：那会让整个 JVM 信任该中间人，你的 PAT 也会被它看到。正确做法是提供"自定义 CA 证书路径"配置项，让用户显式指定。
+- **自定义 CA 必须「追加」到默认信任链，绝不能「替换」**：替换成"只信这一个 CA"后，用户**关掉代理就彻底不可用**（那时对端是正常的 Sectigo 证书）。实测复现过。`TlsTrustTest.appendsToDefaultTrustStoreInsteadOfReplacing` 就是锁这条的——它断言组合信任链的 CA 数 > 默认的 143 张。
+- **不要用 `-Djavax.net.ssl.trustStoreType=Windows-ROOT` 复用系统证书存储**：看起来最省事，但在 **jlink 裁剪后的 JRE 上直接抛** `NoSuchAlgorithmException: Error constructing implementation ... SSLContextImpl$DefaultSSLContext`——SunMSCAPI 在 `jdk.crypto.mscapi` 模块里，裁剪清单没有它。而"追加式"方案只用 `java.base` 的类，实测裁剪 JRE 上正常，`jlink.ps1` 一个字都不用改。
+- **检查端和下载端是两个独立的 `HttpClient`，必须都配**：`release-assets.githubusercontent.com` 同样会被本机代理劫持。只给 `GithubClient` 配 CA 会出现"检查成功但下载失败"这种极难理解的状态。
+- **诊断中间人要用「验证失败后的一次性只读探测」，不能只看错误码**：`GithubClient` 捕获异常后沿 `getCause()` 找到 `CertPathBuilderException`，再用一个**信任一切**的 `SSLContext` 连同一 host:port 读对端叶子证书的 `Issuer`。注意实测异常结构是 4 层（`SSLHandshakeException -> SSLHandshakeException -> ValidatorException -> CertPathBuilderException`），只看顶层无法与"协议版本不匹配"之类的握手失败区分。
+  - 这次探测**不发起任何真实请求**，也**绝不放宽后续校验**——主连接已经失败了，它只负责回答"是谁"。诊断失败必须返回 empty，不能让原来那个报错变得更糟。
+  - `probe()` 必须给超时（现在是 3s）：诊断是附加价值，不能拖住整个检查流程。
+- **`No name matching api.github.com found` 不是 DNS 问题**：它是证书 SAN 与域名不匹配，根因同样是中间人重签时没用对域名。当初实测时就因为这条报错误导，以为是解析失败。必须单独识别（`TlsDiagnostics.isHostnameMismatch`）并在文案里主动排除"DNS 故障"这个误判。
+- **证书加载失败绝不能阻断启动**：`customCaFile` 指错、文件是垃圾、超过 1MB——一律降级为"用默认信任库"并记 warn。证书是可选功能，没有权力让程序起不来。同理 `PATCH /api/settings` 要**先试读再保存**，否则用户会得到"保存成功、重启后才发现加载不了"的状态。
+- **自定义 CA 换路径后需要重启才生效**：`SSLContext` 在启动时构造并注入 `HttpClient`，`http` 字段是 final 且被多处长期持有。不做热更新——重建要引入可变引用，收益不抵复杂度。接口因此返回 `requiresRestart`，界面必须明示，否则用户以为已经修好了，回头再检查还是失败。注意 `status` 反映的是**启动时**的结果，不是当前配置值，两者可能不一致。
+- **验证中间人场景不要动系统 hosts**：用 `-Djdk.net.hosts.file=<临时文件>` 把 `api.github.com` 指到本机自签 HTTPS 服务即可，只影响该测试进程。实测这套办法能完整复现"检查失败 → 配 CA → 检查成功 → 关掉代理仍成功"的全链路。
+- **检查失败也要更新 `last_checked_at` 并把原因落库**：只写时间不写原因，用户刷新后只剩一条没有原因的失败；只写原因不写时间，界面会显示"从未检查"却挂着失败信息，自相矛盾。三列一起写才自洽。
+- **「检查失败」不能直接等同于「被中间人劫持」**：断网、404、限流同样会失败。界面显示中间人横幅的**唯一判据**是 `lastTlsIssuer` 非空，误报会让人去关一堆正常软件，比不提示更糟。
 
 ### 前端
 

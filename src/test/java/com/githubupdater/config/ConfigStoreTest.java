@@ -126,4 +126,61 @@ class ConfigStoreTest {
         assertEquals(99, config.schemaVersion);
         assertEquals(2, config.maxParallelTasks);
     }
+
+    // ── 自定义 CA ───────────────────────────────────────
+
+    @Test
+    @DisplayName("customCaFile 应能往返保存")
+    void customCaRoundTrip() {
+        ConfigStore store = new ConfigStore(tempDir);
+        AppConfig config = store.load();
+        config.customCaFile = "D:\\tools\\proxy-ca.pem";
+        store.save(config);
+
+        AppConfig reloaded = new ConfigStore(tempDir).load();
+        assertEquals("D:\\tools\\proxy-ca.pem", reloaded.customCaFile);
+    }
+
+    @Test
+    @DisplayName("空白的 customCaFile 应归一为 null，而不是空串")
+    void blankCustomCaBecomesNull() {
+        AppConfig config = new AppConfig();
+        config.customCaFile = "   ";
+        config.normalized();
+
+        // 空串会被当成"配置了一个空路径"，界面显示成"已配置但加载失败"，
+        // 与"未配置"混淆。归一为 null 才能正确表达"没配"。
+        assertNull(config.customCaFile);
+    }
+
+    @Test
+    @DisplayName("旧配置没有 customCaFile 字段时应加载为 null")
+    void oldConfigWithoutCustomCa() throws Exception {
+        ConfigStore store = new ConfigStore(tempDir);
+        Files.createDirectories(tempDir);
+        Files.writeString(store.path(), """
+                { "schemaVersion": 1, "maxParallelTasks": 2 }
+                """);
+
+        AppConfig config = store.load();
+        assertNull(config.customCaFile);
+    }
+
+    @Test
+    @DisplayName("相对路径应按数据目录解析，绝对路径原样使用")
+    void resolvesCustomCaPath() {
+        AppConfig config = new AppConfig();
+        Path dataDir = Path.of("D:\\app\\data");
+
+        config.customCaFile = "certs\\proxy.pem";
+        assertEquals(Path.of("D:\\app\\data\\certs\\proxy.pem"),
+                config.resolveCustomCaFile(dataDir),
+                "相对路径应指向数据目录，而不是进程工作目录");
+
+        config.customCaFile = "E:\\other\\ca.pem";
+        assertEquals(Path.of("E:\\other\\ca.pem"), config.resolveCustomCaFile(dataDir));
+
+        config.customCaFile = null;
+        assertNull(config.resolveCustomCaFile(dataDir));
+    }
 }

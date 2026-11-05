@@ -50,6 +50,14 @@ public final class HttpFetcher {
     private final java.util.concurrent.ExecutorService executor;
 
     public HttpFetcher(RateLimiter rateLimiter) {
+        this(rateLimiter, null);
+    }
+
+    /**
+     * @param rateLimiter 全局限速器
+     * @param ssl         自定义 SSLContext（含用户配置的额外 CA）；为 null 用默认
+     */
+    public HttpFetcher(RateLimiter rateLimiter, javax.net.ssl.SSLContext ssl) {
         this.rateLimiter = rateLimiter;
 
         // 与 GithubClient 同理：显式 HTTP/1.1 + 固定小线程池。
@@ -62,13 +70,18 @@ public final class HttpFetcher {
             return t;
         });
 
-        this.http = HttpClient.newBuilder()
+        var builder = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(20))
                 // 必须跟随 302：GitHub 会跳到 release-assets.githubusercontent.com
                 .followRedirects(HttpClient.Redirect.NORMAL)
-                .executor(executor)
-                .build();
+                .executor(executor);
+        // 下载目标（release-assets.githubusercontent.com）同样会被本机代理劫持，
+        // 只给检查端配 CA 会出现"检查成功但下载失败"这种极难理解的状态。
+        if (ssl != null) {
+            builder.sslContext(ssl);
+        }
+        this.http = builder.build();
     }
 
     /**
@@ -375,6 +388,13 @@ public final class HttpFetcher {
     private static DownloadException networkError(Exception e) {
         if (e instanceof InterruptedException) {
             Thread.currentThread().interrupt();
+        }
+        // 证书问题要有独立分类：否则用户只会看到"网络请求失败"，
+        // 完全不知道原因是本机代理在解密流量。
+        if (TlsDiagnostics.isTlsCertificateProblem(e)) {
+            boolean mismatch = TlsDiagnostics.isHostnameMismatch(e);
+            return new DownloadException(DownloadException.Kind.TLS_UNTRUSTED,
+                    (mismatch ? "证书与域名不匹配：" : "TLS 证书链不受信任：") + e.getMessage(), e);
         }
         return new DownloadException(DownloadException.Kind.NETWORK,
                 "网络请求失败: " + e.getMessage(), e);

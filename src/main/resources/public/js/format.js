@@ -147,3 +147,48 @@ export function kindLabel(kind) {
         default: return kind || '未知';
     }
 }
+
+/**
+ * 最近一次检查的结局。
+ *
+ * 与任务状态不同：这是"检查有没有跑通"，不是"文件有没有下好"。
+ * 空串或 null 表示从未检查过。
+ * @param {string} status
+ */
+export function checkStatusLabel(status) {
+    switch (status) {
+        case 'UPDATED': return '有新版本';
+        case 'NO_CHANGE': return '已是最新';
+        case 'ERROR': return '检查失败';
+        case 'SKIPPED': return '已跳过';
+        default: return '';
+    }
+}
+
+/**
+ * 这次检查失败是不是因为中间人劫持。
+ *
+ * 只有拿到签发者才算——仅仅是"失败"不够，那可能是断网、404、限流。
+ * 把普通失败误报成"你被中间人攻击了"会制造恐慌，比不提示更糟。
+ * @param {any} entry
+ */
+export function isMitmFailure(entry) {
+    return !!(entry && entry.lastCheckStatus === 'ERROR' && entry.lastTlsIssuer);
+}
+
+/**
+ * 从签发者字符串里抽出最容易认的部分。
+ *
+ * 完整 DN 是 `CN=steamcommunity.com, O=Steamcommunity302, C=CN`，
+ * 直接铺在界面上太长，优先取 O（组织），没有就取 CN。
+ * @param {string} issuer
+ */
+export function issuerShortName(issuer) {
+    if (!issuer) return '';
+    const o = /(?:^|,)\s*O=([^,]+)/.exec(issuer);
+    if (o) return o[1].trim();
+    const cn = /(?:^|,)\s*CN=([^,]+)/.exec(issuer);
+    if (cn) return cn[1].trim();
+    return issuer;
+}
+

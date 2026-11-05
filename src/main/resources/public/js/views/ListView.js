@@ -19,7 +19,7 @@ import { toastError } from '../toast.js';
 import { readCssPx } from '../theme.js';
 import { VirtualList } from '../components/VirtualList.js';
 import { Button } from '../components/Button.js';
-import { formatRelative, isQuotaLow, stateLabel } from '../format.js';
+import { formatRelative, isQuotaLow, isMitmFailure, stateLabel } from '../format.js';
 
 /** 行高与 CSS 同源。模块顶层只读一次：令牌在运行期不变，读一次就够。
  *  64 是读不到令牌时的兜底值，与 `--h-row` 的默认值一致。 */
@@ -144,11 +144,27 @@ function EntryRow({ entry, task, selected }) {
     const sameAsFull = name === entry.fullName;
     const showUpdate = entry.hasUpdate === true;
 
-    // 行状态决定左侧刻线颜色：需要处理 > 正在跑 > 出错 > 无
+    // 行状态决定左侧刻线颜色：出错 > 需要处理 > 正在跑 > 无
     let rowState = '';
     let badge = null;
 
-    if (task) {
+    // 检查失败必须优先于任务状态显示。
+    //
+    // 截图验证时发现的问题：某个条目历史上有"已应用"的下载任务，
+    // 于是左栏一直显示绿色「已应用」，而这一轮的检查其实因为证书被拦截
+    // 彻底失败了——用户扫一眼左栏会以为一切正常，右侧却在报警。
+    // 上一次下载成功不代表这一次检查成功，两者是不同的事实。
+    if (entry.lastCheckStatus === 'ERROR') {
+        rowState = 'error';
+        badge = isMitmFailure(entry)
+            ? html`<span class="badge badge--error entry-badge">证书被拦截</span>`
+            : html`<span class="badge badge--error entry-badge">检查失败</span>`;
+        // 但正在下载的任务仍然更紧急：用户此刻就盯着进度
+        if (task && (task.state === 'RUNNING' || task.state === 'VERIFYING')) {
+            rowState = 'busy';
+            badge = html`<span class="badge badge--live entry-badge">${stateLabel(task.state)}</span>`;
+        }
+    } else if (task) {
         rowState = task.state === 'FAILED' ? 'error' : 'busy';
         badge = html`<span class="badge badge--live entry-badge">${stateLabel(task.state)}</span>`;
     } else if (showUpdate) {
