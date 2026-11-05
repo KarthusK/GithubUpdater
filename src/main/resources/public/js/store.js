@@ -48,6 +48,15 @@ export const store = {
     listeners: new Set(),
 
     /**
+     * 正在补拉的任务 id。
+     *
+     * <p>防止同一条任务被并发拉多次——SSE 重连时 snapshot 之后可能连续
+     * 收到几条指向未知任务的 state 事件，不去重会打出一串重复请求。
+     * @type {Set<number>}
+     */
+    _fetchingTasks: new Set(),
+
+    /**
      * 订阅变更。
      * @param {Function} fn
      * @returns {Function} 取消订阅
@@ -92,18 +101,53 @@ export const store = {
 
     /**
      * 只更新任务状态，不整体重建。
+     *
+     * <p><b>任务不在本地时不能静默返回。</b>那会让界面永远不更新——
+     * 典型场景：另一个标签页建的任务、`task.created` 在重连时丢包、
+     * 或者页面刚好在 SSE 断开的间隙里。改为补拉一次完整任务，
+     * 补上之后再走正常路径。
+     *
      * @param {number} taskId
      * @param {string} state
      */
     setTaskState(taskId, state) {
         const t = this.tasks.get(taskId);
-        if (!t) return;
+        if (!t) {
+            // 异步补拉；失败静默（任务可能已被清理或本来就是别人的）
+            this.fetchTask(taskId);
+            return;
+        }
         t.state = state;
         if (state === 'RUNNING') t.running = true;
         if (state === 'DONE' || state === 'FAILED' || state === 'CANCELLED' || state === 'PAUSED') {
             t.running = false;
         }
         this.emit();
+    },
+
+    /**
+     * 从服务端拉一个任务的完整信息并合并进来。
+     *
+     * <p>放在 store 而不是各调用方各写一份：`useSse` 与 `setTaskState`
+     * 都需要它，两处实现迟早会分叉。
+     *
+     * @param {number} taskId
+     */
+    async fetchTask(taskId) {
+        // 避免同一条任务被并发拉多次（SSE 重连时可能连续触发）
+        if (this._fetchingTasks.has(taskId)) return;
+        this._fetchingTasks.add(taskId);
+        try {
+            const { request } = await import('./api.js');
+            const task = await request(`/api/tasks/${taskId}`);
+            if (task && task.id) {
+                this.upsertTask(task);
+            }
+        } catch (e) {
+            // 任务可能已被清理，或服务刚重启——都不该影响界面
+        } finally {
+            this._fetchingTasks.delete(taskId);
+        }
     },
 
     /** @param {number} entryId @param {any} patch */

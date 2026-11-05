@@ -166,6 +166,10 @@ public final class DownloadService {
                     continue;
                 }
 
+                // 必须推 RUNNING：否则界面上的任务会一直停在"排队中"，
+                // 用户以为没开始下载，其实已经在跑了。
+                notifyState(task.id(), TaskState.RUNNING);
+
                 AtomicBoolean flag = new AtomicBoolean(false);
                 runningFlags.put(task.id(), flag);
                 workers.submit(() -> executeTask(task.id(), flag));
@@ -231,6 +235,8 @@ public final class DownloadService {
 
             // 3. 校验
             store.setState(taskId, TaskState.VERIFYING, null, null);
+            // 校验大文件要花几秒，不推的话界面会像卡在 100%
+            notifyState(taskId, TaskState.VERIFYING);
             DownloadTask current = store.findTask(taskId).orElseThrow();
             DigestVerifier.Result result = DigestVerifier.verify(partFile, current.expectedDigest());
 
@@ -261,6 +267,11 @@ public final class DownloadService {
 
             store.updateTaskProgress(taskId, total);
             store.setState(taskId, TaskState.DONE, null, null);
+            // 下载完成的推送是整个流程最关键的一条：没有它，用户会一直看到
+            // "下载中"卡在 100%，直到手动刷新页面才发现其实早就下好了。
+            // 必须放在 setState 之后——前端收到 DONE 会立刻回拉任务详情，
+            // 若此时库里还是旧状态，会读到不一致的值。
+            notifyState(taskId, TaskState.DONE);
             log.info("任务 {} 下载完成，{} 字节", taskId, total);
 
         } catch (DownloadException e) {

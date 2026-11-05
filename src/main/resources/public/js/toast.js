@@ -88,6 +88,11 @@ export function toastError(err) {
         case 'RATE_LIMITED':
             toast('GitHub 配额已用尽，请等待重置或配置 Token', 'warn');
             return;
+        case 'TASK_ALREADY_ACTIVE':
+            // 服务端已经把"排队中/下载中"这类具体状态写进 message 了，
+            // 原样显示比这里再编一句更准确。
+            toast((err && err.message) || '这条规则已有任务在进行中', 'warn');
+            return;
         case 'GITHUB_AUTH_FAILED':
             toast('GitHub Token 无效或已过期，请到设置页重新填写', 'error');
             return;

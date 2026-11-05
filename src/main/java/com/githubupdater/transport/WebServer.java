@@ -824,6 +824,27 @@ public final class WebServer {
                 ? null : num(body.get("expectedSize"), 0);
         String expectedDigest = str(body.get("expectedDigest"));
 
+        // 同一条规则不允许同时有多个进行中的任务。
+        //
+        // 原因不是"保守"，是必然失败：两个任务会拼出**同一个** .part 路径
+        // （规则的目标目录 + 文件名 + ".part"），而 .part 是独占打开的。
+        // 实测第二个任务报：
+        //   AccessDeniedException: ...\.apk.part: 另一个程序正在使用此文件
+        //
+        // 这个错误信息对用户毫无意义——他看不出是"自己点了两次"造成的。
+        // 所以在创建阶段就挡住，并明确告诉他该怎么办。
+        //
+        // 注意只挡"占着 .part"的状态（QUEUED/RUNNING/VERIFYING/PAUSED），
+        // DONE 不算——那时 .part 已改名成 .ready，重新下载是合理的。
+        List<DownloadTask> active = store.findActiveTasksByRule(ruleId);
+        if (!active.isEmpty()) {
+            DownloadTask busy = active.get(0);
+            ctx.status(409).json(error("TASK_ALREADY_ACTIVE",
+                    "这条规则已有任务在进行中（" + taskStateLabel(busy.state())
+                            + "），请等待它完成或先取消"));
+            return;
+        }
+
         // 路径规划：.part 与最终文件必须同卷（ATOMIC_MOVE 的前提）
         Path targetDir = Path.of(r.targetDir());
         String fileName = (r.kind() == AssetKind.COLLECTION)
@@ -840,6 +861,26 @@ public final class WebServer {
         long taskId = store.insertTask(ruleId, releaseId, releaseTag, assetId, assetName,
                 downloadUrl, expectedSize, expectedDigest,
                 partPath.toString(), finalPath.toString());
+
+        // 新建任务必须主动广播。
+        //
+        // 之前这里什么都不推，导致点「下载」后浏览器完全不知道该任务的存在：
+        // 界面停在原样，用户必须手动刷新才能看到进度条。而后续的
+        // task.state / task.progress 事件都只带 taskId，前端在本地找不到
+        // 这个任务时会直接丢弃，于是整个下载过程对界面不可见。
+        //
+        // 用专门的 task.created 而不是复用 task.state：后者语义是"已有任务
+        // 状态变了"，只带 taskId；前端新建时需要 assetRuleId / assetName /
+        // expectedSize 才能把那一行渲染出来。
+        sse.broadcast("task.created", Map.of(
+                "taskId", taskId,
+                "assetRuleId", ruleId,
+                "assetName", assetName,
+                "releaseTag", releaseTag,
+                "state", TaskState.QUEUED.name(),
+                "expectedSize", expectedSize == null ? 0L : expectedSize,
+                "bytesDone", 0L
+        ));
 
         ctx.json(ok(Map.of(
                 "taskId", taskId,
@@ -1105,6 +1146,24 @@ public final class WebServer {
         ctx.json(ok(Map.of("backups", out)));
     }
 
+    /**
+     * 任务状态的中文名，用于拼错误提示。
+     *
+     * <p>只在服务端错误信息里用；前端渲染仍走 format.js 的 stateLabel。
+     */
+    private static String taskStateLabel(TaskState state) {
+        return switch (state) {
+            case QUEUED -> "排队中";
+            case RUNNING -> "下载中";
+            case VERIFYING -> "校验中";
+            case PAUSED -> "已暂停";
+            case DONE -> "待应用";
+            case APPLIED -> "已应用";
+            case FAILED -> "失败";
+            case CANCELLED -> "已取消";
+        };
+    }
+
     /** 错误码 → HTTP 状态码。与 docs/03-API接口.md 的错误码表一致。 */
     private static int statusOf(String code) {
         return switch (code) {
@@ -1112,7 +1171,8 @@ public final class WebServer {
             case "FORBIDDEN_HOST" -> 403;
             case "NOT_FOUND", "GITHUB_NOT_FOUND" -> 404;
             case "VALIDATION_FAILED" -> 400;
-            case "ASSET_NOT_MATCHED", "ASSET_AMBIGUOUS", "RANGE_UNSUPPORTED", "GIT_DIRTY" -> 409;
+            case "ASSET_NOT_MATCHED", "ASSET_AMBIGUOUS", "RANGE_UNSUPPORTED", "GIT_DIRTY",
+                 "TASK_ALREADY_ACTIVE" -> 409;
             case "ASSET_GONE" -> 410;
             case "DIGEST_MISMATCH" -> 422;
             case "FILE_LOCKED" -> 423;

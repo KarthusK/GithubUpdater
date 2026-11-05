@@ -109,22 +109,34 @@ function emptyText(total, filter) {
 /**
  * 把任务按 assetRuleId 归组，取"最值得显示"的那一个。
  *
- * 优先级：RUNNING > VERIFYING > DONE（待应用）> FAILED > PAUSED > 其它。
- * 这样左栏里看到的状态就是用户最该关心的那个。
+ * <p>优先级：RUNNING > VERIFYING > QUEUED > PAUSED > FAILED > DONE > 其它。
+ *
+ * <p><b>QUEUED 必须高于 DONE</b>。这里踩过坑：原顺序把 DONE 排在 QUEUED 前面，
+ * 而同一规则下往往留着历史 DONE 任务，于是用户点下载后，新任务刚建出来（QUEUED）
+ * 就立刻被旧任务盖住，左栏一直显示"待应用"，看起来像点了没反应。
+ *
+ * <p>同一优先级内取 id 最大的（最新创建的），避免旧任务盖过新任务。
+ *
  * @param {Map<number, any>} tasks
  */
 function buildTaskIndex(tasks) {
     const PRIORITY = {
-        RUNNING: 6, VERIFYING: 5, DONE: 4, FAILED: 3, PAUSED: 2, QUEUED: 1,
+        RUNNING: 8, VERIFYING: 7, QUEUED: 6, PAUSED: 5, FAILED: 4, DONE: 3, APPLIED: 2, CANCELLED: 1,
     };
     /** @type {Map<number, any>} */
     const index = new Map();
 
     for (const t of tasks.values()) {
         const cur = index.get(t.assetRuleId);
+        if (!cur) {
+            index.set(t.assetRuleId, t);
+            continue;
+        }
         const p = PRIORITY[t.state] || 0;
-        const cp = cur ? (PRIORITY[cur.state] || 0) : -1;
-        if (p > cp) index.set(t.assetRuleId, t);
+        const cp = PRIORITY[cur.state] || 0;
+        if (p > cp || (p === cp && (t.id || 0) > (cur.id || 0))) {
+            index.set(t.assetRuleId, t);
+        }
     }
     return index;
 }

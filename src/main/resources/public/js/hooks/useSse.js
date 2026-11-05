@@ -39,6 +39,21 @@ function handleEvent(event, data) {
             store.setChecksInProgress(!!data.checksInProgress);
             break;
 
+        case 'task.created':
+            // 新建任务必须由服务端主动告知：task.state / task.progress 都只带
+            // taskId，前端本地没有这个任务时无从渲染。缺了这条事件，用户点完
+            // 下载后界面毫无反应，只能手动刷新才能看到进度。
+            store.upsertTask({
+                id: data.taskId,
+                assetRuleId: data.assetRuleId,
+                assetName: data.assetName,
+                releaseTag: data.releaseTag,
+                expectedSize: data.expectedSize,
+                bytesDone: data.bytesDone || 0,
+                state: data.state || 'QUEUED',
+            });
+            break;
+
         case 'task.progress':
             // 高频事件：不走 store 广播
             scheduleProgress(data);
@@ -48,8 +63,9 @@ function handleEvent(event, data) {
             store.setTaskState(data.taskId, data.state);
             if (['DONE', 'FAILED', 'CANCELLED', 'APPLIED'].includes(data.state)) {
                 clearProgress(data.taskId);
-                // 状态变了，任务的其它字段（如 errorMessage）也可能变了，重拉一次
-                refreshTask(data.taskId);
+                // 状态变了，任务的其它字段（如 errorMessage）也可能变了，重拉一次。
+                // 用 store 上的共享实现，避免与 setTaskState 的补拉逻辑各写一份。
+                store.fetchTask(data.taskId);
             }
             break;
 
@@ -75,19 +91,5 @@ function handleEvent(event, data) {
 
         default:
             console.debug('未处理的 SSE 事件', event, data);
-    }
-}
-
-/**
- * 单个任务重拉。失败静默——SSE 会再推。
- * @param {number} taskId
- */
-async function refreshTask(taskId) {
-    try {
-        const { request } = await import('../api.js');
-        const task = await request(`/api/tasks/${taskId}`);
-        store.upsertTask(task);
-    } catch (e) {
-        // 忽略：任务可能已被清理
     }
 }

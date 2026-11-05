@@ -3,6 +3,7 @@ package com.githubupdater.infra.db;
 import com.githubupdater.domain.AssetKind;
 import com.githubupdater.domain.AssetRule;
 import com.githubupdater.domain.Entry;
+import com.githubupdater.domain.TaskState;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -401,5 +402,80 @@ class SqliteStoreTest {
         // 旧数据在 v3 新列上全是 NULL，语义正好是"从未检查"
         assertFalse(r.hasBeenChecked());
         assertFalse(r.hasCachedAsset());
+    }
+
+    // ── 并发下载防护 ────────────────────────────────────
+
+    @Test
+    @DisplayName("新建的任务应被 recognizeActiveTasksByRule 找到")
+    void activeTaskIsFoundByRule() throws Exception {
+        long entryId = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        long ruleId = store.insertRule(entryId, "*.apk", null, AssetKind.COLLECTION,
+                "E:\\APK", null, 1, false, null);
+        store.flush();
+
+        long taskId = store.insertTask(ruleId, 1L, "v1", 100L, "a.apk",
+                "https://example.com/a.apk", 10L, null, "C:\\t\\a.apk.part", "C:\\t\\a.apk");
+        store.flush();
+
+        var active = store.findActiveTasksByRule(ruleId);
+        assertEquals(1, active.size(), "QUEUED 任务应算作占用中");
+        assertEquals(taskId, active.get(0).id());
+    }
+
+    @Test
+    @DisplayName("DONE 状态不算占用——.part 已改名，重新下载是合理的")
+    void doneTaskDoesNotBlockRedownload() throws Exception {
+        long entryId = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        long ruleId = store.insertRule(entryId, "*.apk", null, AssetKind.COLLECTION,
+                "E:\\APK", null, 1, false, null);
+        store.flush();
+
+        long taskId = store.insertTask(ruleId, 1L, "v1", 100L, "a.apk",
+                "https://example.com/a.apk", 10L, null, "C:\\t\\a.apk.part", "C:\\t\\a.apk");
+        store.flush();
+        store.setState(taskId, TaskState.DONE, null, null);
+        store.flush();
+
+        assertTrue(store.findActiveTasksByRule(ruleId).isEmpty(),
+                "DONE 时 .part 已改名成 .ready，不该挡住重新下载");
+    }
+
+    @Test
+    @DisplayName("PAUSED 仍然占用——.part 还在，第二个任务会撞文件")
+    void pausedTaskStillBlocks() throws Exception {
+        long entryId = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        long ruleId = store.insertRule(entryId, "*.apk", null, AssetKind.COLLECTION,
+                "E:\\APK", null, 1, false, null);
+        store.flush();
+
+        long taskId = store.insertTask(ruleId, 1L, "v1", 100L, "a.apk",
+                "https://example.com/a.apk", 10L, null, "C:\\t\\a.apk.part", "C:\\t\\a.apk");
+        store.flush();
+        store.setState(taskId, TaskState.PAUSED, null, null);
+        store.flush();
+
+        var active = store.findActiveTasksByRule(ruleId);
+        assertEquals(1, active.size(), "PAUSED 时 .part 仍存在，必须继续占用");
+        assertEquals(TaskState.PAUSED, active.get(0).state());
+    }
+
+    @Test
+    @DisplayName("不同规则互不影响")
+    void differentRulesAreIndependent() throws Exception {
+        long entryId = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        long ruleA = store.insertRule(entryId, "*.a", null, AssetKind.COLLECTION,
+                "E:\\A", null, 1, false, null);
+        long ruleB = store.insertRule(entryId, "*.b", null, AssetKind.COLLECTION,
+                "E:\\B", null, 1, false, null);
+        store.flush();
+
+        store.insertTask(ruleA, 1L, "v1", 1L, "x.a", "https://e.com/x.a",
+                10L, null, "E:\\A\\x.a.part", "E:\\A\\x.a");
+        store.flush();
+
+        assertFalse(store.findActiveTasksByRule(ruleA).isEmpty());
+        assertTrue(store.findActiveTasksByRule(ruleB).isEmpty(),
+                "B 规则不该被 A 的进行中任务影响");
     }
 }

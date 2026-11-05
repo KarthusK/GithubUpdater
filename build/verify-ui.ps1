@@ -179,6 +179,48 @@ if ($rows -gt 0) {
 })()
 "@) 'found'
 
+        # 点下载后界面必须自己动起来，不能要求用户手动刷新。
+        #
+        # 这里踩过一连串坑：createTask 不广播 SSE、前端 setTaskState 对未知任务
+        # 直接 return、RUNNING/VERIFYING/DONE 三个状态压根没推、pickActiveTask
+        # 让旧的 DONE 任务盖住新任务。任何一条复现，用户看到的都是"点了没反应"。
+        #
+        # 断言分两步：点完立刻有反馈（乐观更新/SSE 任一），且状态不是旧任务残留。
+        $before = Unwrap (Eval @"
+(() => {
+  const h = document.querySelector('.rule-task-head');
+  return h ? h.innerText.replace(/\s+/g, ' ').trim() : '';
+})()
+"@)
+
+        $clicked = Eval @"
+(() => {
+  const items = [...document.querySelectorAll('.rule-item')];
+  for (const it of items) {
+    const btn = [...it.querySelectorAll('button')].find(b => b.innerText.trim() === '下载');
+    if (btn) { btn.click(); return 'clicked'; }
+  }
+  return 'no button';
+})()
+"@
+        Check '点击「下载」' $clicked 'clicked'
+
+        # 给 SSE 与本地乐观更新留出时间，但**不刷新页面**
+        Start-Sleep -Seconds 3
+        $after = Unwrap (Eval @"
+(() => {
+  const h = document.querySelector('.rule-task-head');
+  const p = document.querySelector('.rule-task .progress');
+  return JSON.stringify({
+    head: h ? h.innerText.replace(/\s+/g, ' ').trim() : '',
+    hasProgress: !!p,
+  });
+})()
+"@)
+        Write-Host "     点下载前: $before"
+        Write-Host "     点下载后: $after"
+        Check '点下载后出现任务进度区（无需刷新）' ($after -match '"hasProgress":true')
+
         Check '进度条用 scaleX 而非 width' (Eval @"
 (() => {
   const f = document.querySelector('.progress-fill');

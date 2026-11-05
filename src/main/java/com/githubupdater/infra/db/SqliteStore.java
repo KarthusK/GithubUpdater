@@ -531,9 +531,33 @@ public final class SqliteStore implements AutoCloseable {
         }
     }
 
-    /** 取最早排队的任务，供调度器领取。 */
-    public Optional<DownloadTask> claimNextQueued() throws SQLException {
+    /**
+     * 找出某条规则下仍占着下载槽位的任务（见 {@link TaskState#holdsDownloadSlot()}）。
+     *
+     * <p>用来在创建任务前挡住重复下载：同一条规则的两个任务会写同一个
+     * {@code .part} 文件，第二个必然报 "另一个程序正在使用此文件"。
+     *
+     * @param assetRuleId 规则 id
+     * @return 占用中的任务，按创建时间倒序（最新的在前）；没有则为空
+     */
+    public List<DownloadTask> findActiveTasksByRule(long assetRuleId) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT " + TASK_COLUMNS + " FROM download_task " +
+                "WHERE asset_rule_id = ? AND state IN ('QUEUED','RUNNING','VERIFYING','PAUSED') " +
+                "ORDER BY created_at DESC")) {
+            ps.setLong(1, assetRuleId);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<DownloadTask> list = new ArrayList<>();
+                while (rs.next()) {
+                    list.add(mapTask(rs));
+                }
+                return list;
+            }
+        }
+    }
+
+    /** 取最早排队的任务，供调度器领取。 */
+    public Optional<DownloadTask> claimNextQueued() throws SQLException {        try (PreparedStatement ps = conn.prepareStatement(
                 "SELECT " + TASK_COLUMNS + " FROM download_task WHERE state = 'QUEUED' " +
                 "ORDER BY created_at LIMIT 1")) {
             try (ResultSet rs = ps.executeQuery()) {

@@ -42,6 +42,20 @@ public enum TaskState {
         return this == APPLIED || this == CANCELLED;
     }
 
+    /**
+     * 是否"占着该规则的 .part 文件"。
+     *
+     * <p>这四种状态下磁盘上都可能存在 {@code .part}，也都在用同一个目标路径。
+     * 同一条规则的第二个任务若同时跑起来，必然撞文件：
+     * {@code java.nio.file.AccessDeniedException: ...part: 另一个程序正在使用此文件}。
+     *
+     * <p>注意 {@code DONE} 不算——那时 {@code .part} 已经改名成 {@code .ready}，
+     * 不占着下载用的那个文件名，重新下载是合理的（用户可能想再下一次覆盖它）。
+     */
+    public boolean holdsDownloadSlot() {
+        return this == QUEUED || this == RUNNING || this == VERIFYING || this == PAUSED;
+    }
+
     /** 进程重启时，处于该状态的任务应被重置为 PAUSED。 */
     public boolean requiresResetOnStartup() {
         return this == RUNNING;

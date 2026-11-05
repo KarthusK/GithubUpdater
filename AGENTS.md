@@ -6,7 +6,7 @@ GithubUpdater：Windows 上的 GitHub 软件版本跟踪与下载工具。常驻
 
 **已实测通过的门槛**：**打包产物空载 77.2MB、跑完完整流程后稳态 119.6MB**。**阈值 150MB**（2026-11-02 由 120MB 放宽，见 [`docs/07-验收与风险.md`](docs/07-验收与风险.md) 的变更记录）。
 
-**测试**：`mvn test` → **172 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
+**测试**：`mvn test` → **180 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
 
 **发布产物**：`build/GithubUpdater-0.1.0-win-x64.zip`，**59.5 MB**，解压即用，无需安装 Java。
 
@@ -55,7 +55,7 @@ mvn -v                              # 自检：必须显示 Maven 3.10.0 + Java 
 .\run.ps1 -Minimized                # 静默启动（不自动开浏览器）
 
 mvn -DskipTests package             # 编译 + 打包 → target/github-updater.jar
-mvn test                            # 跑全部单元测试（当前 172 个）
+mvn test                            # 跑全部单元测试（当前 180 个）
 mvn test -Dtest=AssetMatcherTest    # 跑单个测试类
 
 pwsh build/run-dev.ps1              # 启动 daemon（run.ps1 用等价参数，二选一）
@@ -250,6 +250,14 @@ pwsh build/package.ps1 -Zip         # 追加生成发布用 zip
 - **`cached_at` 非空但资产列为 NULL ≠ 从未检查**：前者是"检查过但没匹配到"，该提示调整 glob；后者该提示去点检查。用资产名是否为空代替 `cached_at` 会让两种状态混为一谈，用户会反复点检查却毫无变化。重新检查匹配失败时**必须清空旧资产**，否则会拿上次的 URL 去下一个已不存在的文件。
 - **不要为了"省一次检查"改成后端在 `createTask` 里临时解析资产**（评估过并否决）：那样下载的版本可能与用户刚才检查到的 release 不一致（作者中途发新版）、要在 `asset_rule` 之外二次匹配（引入"检查时唯一、下载时歧义"）、还会把网络调用拖进 `maxThreads=12` 的 Jetty 线程池。**先检查再下载**是正确的语义，不是缺陷。
 - **`matchAssetsForTag` 以前每次 304 都额外发一次 `listReleases`**：而匿名请求命中 304 照样扣配额，"省配额"的初衷完全落空。加了规则缓存后应先查缓存，未命中才补拉。
+- **新建任务必须广播 `task.created`，不能只靠 REST 响应**：`task.state` / `task.progress` 都只带 `taskId`，前端本地没有该任务时无从渲染。缺这条事件的表现就是"点完下载界面毫无反应，手动刷新才看到进度"。
+- **`RUNNING` / `VERIFYING` / `DONE` 三个状态必须推送，不能只推终态**：原来只对 `CANCELLED` / `PAUSED` / `FAILED` 调了 `notifyState`，导致任务永远停在"排队中"，或下载完仍显示"下载中"。实测抓 SSE 时整条生命周期只有 1 条 `task.state`（就是最后的 FAILED）。
+- **`pickActiveTask` / `buildTaskIndex` 里 `QUEUED` 必须排在 `DONE` 前面**：同一规则下往往堆着历史 DONE 任务，若 DONE 优先，用户点下载后新任务（QUEUED）会被旧任务盖住，界面一直显示上一个"待应用"——看起来就像点了没反应。同状态内还要取 id 最大的（最新），不能依赖遍历顺序。
+- **`store.setTaskState` 遇到未知任务不能静默 `return`**：那会让界面永远不更新（另一标签页建的任务、断线期间丢的 `task.created`）。改为补拉一次完整任务。
+- **验证前端改动必须用全新浏览器实例**：这次排查时我一度以为修复没生效——旧页面是改代码前加载的，内存里还是旧模块。`fetch` 拿到的源码是新的、逻辑模拟也对，但页面不重载就不会执行新模块。**先用"新实例是否正常"排除缓存因素，再去怀疑代码**。
+- **同一规则不能有两个进行中的任务：`.part` 路径是固定的，必然撞文件**。两个任务拼出的路径完全相同（规则目录 + 文件名 + `.part`），而 `.part` 独占打开，第二个报 `AccessDeniedException: ...part: 另一个程序正在使用此文件`——这个错误对用户毫无意义，他看不出是自己连点了两次。所以在 `createTask` 阶段返回 `409 TASK_ALREADY_ACTIVE`。
+  - **只挡 `QUEUED`/`RUNNING`/`VERIFYING`/`PAUSED`**（`TaskState.holdsDownloadSlot()`）。`DONE` 必须放行——那时 `.part` 已改名成 `.ready`，重新下载是再正常不过的操作；把 DONE 也算占用会让"下载完再下一次"被无理由拒绝。
+  - 边界要正反都测：连点两次被拒、取消后可重下、**DONE 后可重下**。
 
 ### 前端
 

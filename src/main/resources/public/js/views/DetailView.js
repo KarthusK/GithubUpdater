@@ -404,7 +404,7 @@ function RuleItem({ rule, tasks, entryTag, onChanged }) {
 
         setBusy(true);
         try {
-            await api.createTask({
+            const res = await api.createTask({
                 assetRuleId: rule.id,
                 assetName: a.name,
                 downloadUrl: a.downloadUrl,
@@ -414,6 +414,23 @@ function RuleItem({ rule, tasks, entryTag, onChanged }) {
                 expectedSize: a.size || null,
                 expectedDigest: a.digest || null,
             });
+
+            // 本地乐观插入，不等 SSE。
+            //
+            // 后端也会广播 task.created，两条路是幂等的（upsertTask 按 id 合并）。
+            // 之所以两边都做：SSE 断开时用户至少还能看到"任务已建"，
+            // 而不是点完按钮后界面毫无反应——那正是这个 bug 的表象。
+            if (res && res.taskId) {
+                store.upsertTask({
+                    id: res.taskId,
+                    assetRuleId: rule.id,
+                    assetName: a.name,
+                    releaseTag: a.releaseTag || entryTag || 'unknown',
+                    expectedSize: a.size || 0,
+                    bytesDone: 0,
+                    state: res.state || 'QUEUED',
+                });
+            }
             toast('已加入下载队列');
         } catch (e) {
             toastError(e);
@@ -625,13 +642,28 @@ function RuleItem({ rule, tasks, entryTag, onChanged }) {
     `;
 }
 
-/** 取最该展示的任务。 */
+/**
+ * 从同一规则的任务里取"最该展示"的那一个。
+ *
+ * <p><b>在跑的任务永远优先于已完成的</b>。这里踩过一个坑：ORDER 里把 DONE
+ * 排在 QUEUED 前面，而同一规则下往往堆着历史 DONE 任务，于是用户点了下载、
+ * 新任务其实已经在跑，界面却一直显示上一个"待应用"，看起来像点了没反应。
+ *
+ * <p>同一状态内取 id 最大的（即最新创建的那个）——历史任务不该盖过新任务。
+ *
+ * @param {Array<any>} tasks 同一规则下的任务
+ */
 function pickActiveTask(tasks) {
     if (!tasks || tasks.length === 0) return null;
-    const ORDER = ['RUNNING', 'VERIFYING', 'DONE', 'PAUSED', 'FAILED', 'QUEUED', 'APPLIED', 'CANCELLED'];
+
+    // 真正"正在进行"的状态优先，且必须优先于 DONE —— 否则新任务被旧任务盖住
+    const ORDER = ['RUNNING', 'VERIFYING', 'QUEUED', 'PAUSED', 'FAILED', 'DONE', 'APPLIED', 'CANCELLED'];
+
     for (const s of ORDER) {
-        const t = tasks.find(x => x.state === s);
-        if (t) return t;
+        const matched = tasks.filter(x => x.state === s);
+        if (matched.length === 0) continue;
+        // 同一状态取最新的：任务列表未必有序，不能依赖遍历顺序
+        return matched.reduce((a, b) => ((b.id || 0) > (a.id || 0) ? b : a));
     }
     return tasks[0];
 }
