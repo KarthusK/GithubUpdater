@@ -548,7 +548,7 @@ public final class WebServer {
         data.put("tag", outcome.tag() == null ? "" : outcome.tag());
         data.put("releaseId", outcome.releaseId() == null ? 0 : outcome.releaseId());
         data.put("hasUpdate", outcome.hasUpdate());
-        data.put("matchedAssets", outcome.matchedAssets());
+        data.put("matchedAssets", matchedAssetViews(outcome.matchedAssets()));
         data.put("message", outcome.message() == null ? "" : outcome.message());
         // 检查失败时界面要立刻能显示诊断，不能等下一次刷新
         data.put("lastCheckStatus", outcome.outcome().name());
@@ -807,7 +807,13 @@ public final class WebServer {
         String assetName = str(body.get("assetName"));
         String downloadUrl = str(body.get("downloadUrl"));
         if (assetName == null || assetName.isBlank() || downloadUrl == null || downloadUrl.isBlank()) {
-            ctx.status(400).json(error("VALIDATION_FAILED", "assetName 与 downloadUrl 不能为空"));
+            // 正常情况下前端会从 ruleView.cachedAsset 取这些字段，不会缺。
+            // 缺了说明前端读的是旧结构或规则还没检查过——给出可照做的提示，
+            // 而不是把"缺哪个字段"这种内部细节丢给用户。
+            ctx.status(400).json(error("VALIDATION_FAILED",
+                    r.hasBeenChecked()
+                            ? "这条规则上次检查没有匹配到资产，请先调整规则或重新检查"
+                            : "这条规则还没有检查过，请先点「检查」"));
             return;
         }
 
@@ -1332,6 +1338,55 @@ public final class WebServer {
         m.put("keepVersions", r.keepVersions());
         m.put("autoApply", r.autoApply());
         m.put("enabled", r.enabled());
+        m.put("cachedAsset", cachedAssetView(r));
+        return m;
+    }
+
+    /**
+     * 把匹配结果转成前端可直接用来建任务的形状。
+     *
+     * <p>必须带 ruleId：一个条目下可能有多条规则匹配到不同资产，
+     * 不带的话前端只能取第一个，会装错文件。
+     */
+    private static List<Map<String, Object>> matchedAssetViews(
+            List<CheckService.MatchedAsset> matched) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (var m : matched) {
+            Map<String, Object> v = new LinkedHashMap<>();
+            v.put("ruleId", m.ruleId());
+            v.put("assetName", m.asset().name());
+            v.put("assetId", m.asset().id());
+            v.put("size", m.asset().size());
+            v.put("digest", m.asset().digest() == null ? "" : m.asset().digest());
+            v.put("downloadUrl", m.asset().browserDownloadUrl());
+            out.add(v);
+        }
+        return out;
+    }
+
+    /**
+     * 规则最近一次检查匹配到的资产。
+     *
+     * <p>这是「下载」按钮的全部数据来源——前端不再为了拿 downloadUrl
+     * 去触发一次 checkOne。刷新页面、重启进程后都仍然可用。
+     *
+     * <p>返回 null 表示从未检查过；返回非 null 但 {@code name} 为空表示
+     * 检查过、但这规则没匹配到资产。两者在界面上的引导完全不同。
+     */
+    private static Map<String, Object> cachedAssetView(AssetRule r) {
+        if (!r.hasBeenChecked()) {
+            return null;
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("checked", true);
+        m.put("name", r.cachedAssetName() == null ? "" : r.cachedAssetName());
+        m.put("assetId", r.cachedAssetId() == null ? 0 : r.cachedAssetId());
+        m.put("size", r.cachedAssetSize() == null ? 0 : r.cachedAssetSize());
+        m.put("digest", r.cachedAssetDigest() == null ? "" : r.cachedAssetDigest());
+        m.put("downloadUrl", r.cachedAssetUrl() == null ? "" : r.cachedAssetUrl());
+        m.put("releaseId", r.cachedReleaseId() == null ? 0 : r.cachedReleaseId());
+        m.put("releaseTag", r.cachedReleaseTag() == null ? "" : r.cachedReleaseTag());
+        m.put("cachedAt", r.cachedAt() == null ? 0 : r.cachedAt());
         return m;
     }
 

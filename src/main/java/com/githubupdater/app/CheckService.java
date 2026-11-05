@@ -1,6 +1,7 @@
 package com.githubupdater.app;
 
 import com.githubupdater.domain.AssetMatcher;
+import com.githubupdater.domain.AssetRule;
 import com.githubupdater.domain.Entry;
 import com.githubupdater.domain.VersionResolver;
 import com.githubupdater.infra.db.SqliteStore;
@@ -49,6 +50,16 @@ public final class CheckService {
         return running.get();
     }
 
+    /**
+     * 一条规则匹配到的资产，附带它属于哪条规则。
+     *
+     * <p>带 {@code ruleId} 是必须的：一个条目下可能有多条规则（比如同时要
+     * exe 和 zip），前端必须能分辨"这个资产是给哪条规则的"，否则"下载"
+     * 会拿错文件——而装错文件正是 {@link AssetMatcher} 一直要防的事故。
+     */
+    public record MatchedAsset(long ruleId, ReleaseDto.Asset asset) {
+    }
+
     /** 单个条目的检查结果。 */
     public record CheckOutcome(
             long entryId,
@@ -57,7 +68,7 @@ public final class CheckService {
             String tag,
             Long releaseId,
             boolean hasUpdate,
-            List<String> matchedAssets,
+            List<MatchedAsset> matchedAssets,
             String message,
             /**
              * TLS 不受信任时的证书签发者。
@@ -70,7 +81,7 @@ public final class CheckService {
 
         /** 不含 TLS 诊断信息的结局。 */
         public CheckOutcome(long entryId, String fullName, Outcome outcome, String tag,
-                            Long releaseId, boolean hasUpdate, List<String> matchedAssets,
+                            Long releaseId, boolean hasUpdate, List<MatchedAsset> matchedAssets,
                             String message) {
             this(entryId, fullName, outcome, tag, releaseId, hasUpdate, matchedAssets, message, null);
         }
@@ -148,12 +159,24 @@ public final class CheckService {
             if (result instanceof GithubClient.NotModified nm) {
                 quota.update(nm.quota());
                 store.updateEntryCheckOk(entry.id(), "NO_CHANGE");
-                // 304 时拿不到资产清单，但规则可能已在缓存里匹配过。
-                // 这里仍尝试用上次记录的 tag 匹配一次，避免界面在 304 后丢失已匹配结果。
-                List<String> cached = matchAssetsForTag(entry, entry.lastSeenTag());
+
+                // 304 时拿不到资产清单。但规则上通常已经有上次匹配的结果——
+                // 缓存命中就直接用，不再发请求。
+                //
+                // 这一条以前是每次 304 都额外调一次 listReleases，而匿名请求
+                // 命中 304 照样扣配额，等于"省配额"的初衷完全落空。
+                List<MatchedAsset> cached = cachedAssets(entry, entry.lastSeenTag());
+                if (cached != null) {
+                    return new CheckOutcome(entry.id(), entry.fullName(),
+                            CheckOutcome.Outcome.NO_CHANGE, entry.lastSeenTag(),
+                            entry.lastSeenReleaseId(), false, cached, "内容未修改 (304)");
+                }
+
+                // 缓存不可用（比如刚加的新规则还没匹配过）才补拉一次
+                List<MatchedAsset> refetched = matchAssetsForTag(entry, entry.lastSeenTag());
                 return new CheckOutcome(entry.id(), entry.fullName(),
                         CheckOutcome.Outcome.NO_CHANGE, entry.lastSeenTag(),
-                        entry.lastSeenReleaseId(), false, cached, "内容未修改 (304)");
+                        entry.lastSeenReleaseId(), false, refetched, "内容未修改 (304)");
             }
 
             if (result instanceof GithubClient.Failed failed) {
@@ -187,7 +210,7 @@ public final class CheckService {
             boolean hasUpdate = VersionResolver.hasUpdate(entry.lastSeenReleaseId(), release.id());
 
             // 匹配资产：无论是否新版本都要算，否则界面在"无更新"时看不到可用资产
-            List<String> matched = matchAssets(entry, release);
+            List<MatchedAsset> matched = matchAssets(entry, release);
 
             // 成功路径也要记录结局，并清掉上一次的失败信息
             store.updateEntryCheckOk(entry.id(), hasUpdate ? "UPDATED" : "NO_CHANGE");
@@ -208,15 +231,58 @@ public final class CheckService {
     }
 
     /**
-     * 304 场景下尽力匹配资产。
+     * 尝试直接从规则缓存里取上次的匹配结果。
      *
-     * <p>304 没有响应体，拿不到资产清单。只能拉一次列表端点补数据——但那会
-     * 再消耗一次配额，与"304 省配额"的初衷冲突。所以这里改为：仅在确实配置了
-     * 规则时，才额外拉一次列表；否则直接返回空。
+     * <p>返回 null 表示缓存不可用、必须走网络补拉；返回空列表表示
+     * "缓存里确实没有可匹配的资产"，这是有效结论，不该再去发请求。
      *
-     * <p>更优的做法是缓存上次的资产清单，属于后续优化，此处先保证功能正确。
+     * @param entry 条目
+     * @param tag   期望的 release tag；与缓存里的 tag 不一致则不采纳
      */
-    private List<String> matchAssetsForTag(Entry entry, String tag) {
+    private List<MatchedAsset> cachedAssets(Entry entry, String tag) {
+        if (tag == null || tag.isBlank()) {
+            return null;
+        }
+        try {
+            var rules = store.listRules(entry.id()).stream()
+                    .filter(AssetRule::enabled)
+                    .toList();
+            if (rules.isEmpty()) {
+                return List.of();       // 没规则，无需任何资产
+            }
+            // 只要有一条规则没检查过、或缓存的 tag 对不上，就认为缓存不可用
+            for (var rule : rules) {
+                if (!rule.hasBeenChecked()) {
+                    return null;
+                }
+                if (tag.equals(rule.cachedReleaseTag()) == false) {
+                    return null;
+                }
+            }
+            List<MatchedAsset> out = new ArrayList<>();
+            for (var rule : rules) {
+                if (rule.hasCachedAsset()) {
+                    out.add(new MatchedAsset(rule.id(), new ReleaseDto.Asset(
+                            rule.cachedAssetId() == null ? 0 : rule.cachedAssetId(),
+                            rule.cachedAssetName(),
+                            rule.cachedAssetSize() == null ? 0 : rule.cachedAssetSize(),
+                            rule.cachedAssetDigest(),
+                            rule.cachedAssetUrl())));
+                }
+            }
+            return out;
+        } catch (SQLException e) {
+            log.warn("读取规则缓存失败：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 304 场景下的兜底：缓存不可用时补拉一次资产清单。
+     *
+     * <p>这一步会消耗配额（匿名下 304 也照样扣），所以只在缓存缺失时走。
+     */
+    private List<MatchedAsset> matchAssetsForTag(Entry entry, String tag) {
         if (tag == null || tag.isBlank()) {
             return List.of();
         }
@@ -258,12 +324,18 @@ public final class CheckService {
     }
 
     /**
-     * 用条目下所有启用的规则去匹配资产。
+     * 用条目下所有启用的规则去匹配资产，并把结果写进规则缓存。
      *
-     * <p>只做"能不能匹配上"的探测，不创建下载任务——下载需要用户显式触发。
+     * <p><b>为什么要落库</b>：前端点「下载」时需要 assetName / downloadUrl /
+     * digest。原来它为了拿这些去调一次 checkOne，但 CheckOutcome 只带了文件名，
+     * URL 在这一步就丢了，导致 createTask 必然 400；而且每点一次下载都白扣
+     * 一次配额，刷新页面后又什么都没有。缓存到规则上之后，下载变成纯本地读。
+     *
+     * <p>匹配不到也要写缓存（资产列清空、但记录 cached_at）：这样界面才能区分
+     * "从未检查"和"检查过但规则没匹配到"，否则用户会反复点检查却毫无变化。
      */
-    private List<String> matchAssets(Entry entry, ReleaseDto.Release release) {
-        List<String> result = new ArrayList<>();
+    private List<MatchedAsset> matchAssets(Entry entry, ReleaseDto.Release release) {
+        List<MatchedAsset> result = new ArrayList<>();
         try {
             List<String> names = release.assets().stream()
                     .map(ReleaseDto.Asset::name)
@@ -274,10 +346,34 @@ public final class CheckService {
                 }
                 AssetMatcher.Result match =
                         AssetMatcher.match(names, rule.includeGlob(), rule.excludeGlob());
+
                 if (match.isSingle()) {
-                    result.add(match.singleAsset());
-                } else if (match.kind() == AssetMatcher.Result.Kind.AMBIGUOUS) {
-                    log.warn("规则 {} 匹配到多个资产：{}", rule.id(), match.matched());
+                    // 用匹配出的名字反查完整 Asset。
+                    // 刻意不改 AssetMatcher 的签名：它只做"名字到名字"的匹配，
+                    // 这个契约有 13 个测试锁着，把资产对象塞进去会污染领域层。
+                    String matchedName = match.singleAsset();
+                    var asset = release.assets().stream()
+                            .filter(a -> a.name().equals(matchedName))
+                            .findFirst()
+                            .orElse(null);
+                    if (asset != null) {
+                        result.add(new MatchedAsset(rule.id(), asset));
+                        store.updateRuleAssetCache(rule.id(), asset,
+                                release.id(), release.tagName());
+                    } else {
+                        // 理论上不会发生（名字来自同一个列表），但兜住
+                        log.warn("规则 {} 匹配到 {} 但在资产清单里找不到",
+                                rule.id(), matchedName);
+                        store.updateRuleAssetCache(rule.id(), null,
+                                release.id(), release.tagName());
+                    }
+                } else {
+                    if (match.kind() == AssetMatcher.Result.Kind.AMBIGUOUS) {
+                        log.warn("规则 {} 匹配到多个资产：{}", rule.id(), match.matched());
+                    }
+                    // 没有唯一匹配：记下"检查过"，但不留资产
+                    store.updateRuleAssetCache(rule.id(), null,
+                            release.id(), release.tagName());
                 }
             }
         } catch (SQLException e) {

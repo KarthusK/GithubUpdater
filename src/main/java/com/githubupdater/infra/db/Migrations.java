@@ -18,7 +18,7 @@ public final class Migrations {
     }
 
     /** 当前代码支持的最新 schema 版本。 */
-    public static final int LATEST_VERSION = 2;
+    public static final int LATEST_VERSION = 3;
 
     public static final List<Migration> ALL = List.of(
             new Migration(1, "初始 schema", List.of(
@@ -130,6 +130,29 @@ public final class Migrations {
                     // 单独存 TLS 签发者：界面要据此判断"这是中间人劫持"而不是
                     // 普通网络故障，两者给的引导完全不同。
                     "ALTER TABLE entry ADD COLUMN last_tls_issuer   TEXT"
+            )),
+
+            new Migration(3, "按规则缓存最近一次检查匹配到的资产", List.of(
+                    // 为什么要缓存：点「下载」原本会先调一次 checkOne 去拿资产信息，
+                    // 但 CheckOutcome.matchedAssets 只带了文件名，URL / id / digest
+                    // 在这一步就丢了，导致 createTask 必然 400。
+                    //
+                    // 缓存到**规则**而不是条目：一个条目下多条规则会匹配到不同资产，
+                    // 按条目存会让"下载第一条规则"取到别人的文件——这正是
+                    // AssetMatcher 一直要防的装错文件事故。
+                    "ALTER TABLE asset_rule ADD COLUMN cached_asset_name   TEXT",
+                    "ALTER TABLE asset_rule ADD COLUMN cached_asset_id     INTEGER",
+                    "ALTER TABLE asset_rule ADD COLUMN cached_asset_size   INTEGER",
+                    "ALTER TABLE asset_rule ADD COLUMN cached_asset_digest TEXT",
+                    // browser_download_url 是永久链接（releases/download/<tag>/<asset>），
+                    // 302 跳到签名 CDN 发生在下载时，所以落库不存在"URL 过期"问题
+                    "ALTER TABLE asset_rule ADD COLUMN cached_asset_url    TEXT",
+                    "ALTER TABLE asset_rule ADD COLUMN cached_release_id   INTEGER",
+                    "ALTER TABLE asset_rule ADD COLUMN cached_release_tag  TEXT",
+                    // 关键：cached_at 为 NULL = 从未检查过；非 NULL 但 asset_name
+                    // 为 NULL = 检查过、但该规则没匹配到资产。两种提示完全不同，
+                    // 必须能区分，所以不能用 asset_name 是否为空代替。
+                    "ALTER TABLE asset_rule ADD COLUMN cached_at           INTEGER"
             ))
     );
 

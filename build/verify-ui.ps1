@@ -166,6 +166,19 @@ if ($rows -gt 0) {
 
     if ($ruleCount -gt 0) {
         Check '规则 glob 可见' (Eval 'document.querySelector(".rule-glob").textContent.trim().length > 0')
+
+        # 「下载」按钮不能是"点了必然报错"的摆设。
+        #
+        # 这个按钮曾经长期失效：它先调一次 checkOne 去拿 downloadUrl，而
+        # CheckOutcome 只带了文件名，URL/digest 在检查阶段就被丢掉了，
+        # createTask 必然 400。现在资产由后端按规则缓存，按钮应当可点。
+        Check '存在「下载」按钮' (Eval @"
+(() => {
+  const btns = [...document.querySelectorAll('.rule-actions button')];
+  return btns.some(b => b.innerText.trim() === '下载') ? 'found' : 'missing';
+})()
+"@) 'found'
+
         Check '进度条用 scaleX 而非 width' (Eval @"
 (() => {
   const f = document.querySelector('.progress-fill');

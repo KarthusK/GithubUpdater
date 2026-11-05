@@ -280,4 +280,126 @@ class SqliteStoreTest {
         assertNull(e.lastCheckStatus());
         assertNull(e.lastTlsIssuer());
     }
+
+    // ── v3：规则资产缓存 ────────────────────────────────
+
+    @Test
+    @DisplayName("缓存资产后应能完整读回，且 hasCachedAsset 为真")
+    void cachesMatchedAsset() throws Exception {
+        long entryId = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        long ruleId = store.insertRule(entryId, "*.apk", null, AssetKind.COLLECTION,
+                "E:\\APK", null, 2, false, null);
+        store.flush();
+
+        var asset = new com.githubupdater.infra.github.ReleaseDto.Asset(
+                123L, "LocalSend-1.18.2-android-arm64v8.apk", 46558706L,
+                "sha256:82ec3568fba2aa", "https://github.com/x/y/releases/download/v1.18.2/a.apk");
+        store.updateRuleAssetCache(ruleId, asset, 374422528L, "v1.18.2");
+        store.flush();
+
+        AssetRule r = store.listRules(entryId).get(0);
+        assertTrue(r.hasCachedAsset());
+        assertTrue(r.hasBeenChecked());
+        assertEquals("LocalSend-1.18.2-android-arm64v8.apk", r.cachedAssetName());
+        assertEquals(123L, r.cachedAssetId());
+        assertEquals(46558706L, r.cachedAssetSize());
+        assertEquals("sha256:82ec3568fba2aa", r.cachedAssetDigest());
+        assertEquals("https://github.com/x/y/releases/download/v1.18.2/a.apk",
+                r.cachedAssetUrl());
+        assertEquals(374422528L, r.cachedReleaseId());
+        assertEquals("v1.18.2", r.cachedReleaseTag());
+        assertNotNull(r.cachedAt());
+    }
+
+    @Test
+    @DisplayName("检查过但没匹配到：应保留 cached_at，且与从未检查可区分")
+    void checkedButNotMatchedIsDistinguishable() throws Exception {
+        long entryId = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        long ruleId = store.insertRule(entryId, "*.apk", null, AssetKind.COLLECTION,
+                "E:\\APK", null, 1, false, null);
+        store.flush();
+
+        // 从未检查
+        AssetRule before = store.listRules(entryId).get(0);
+        assertFalse(before.hasBeenChecked(), "刚建的规则不该算检查过");
+        assertFalse(before.hasCachedAsset());
+
+        // 检查了但没匹配到（asset 传 null）
+        store.updateRuleAssetCache(ruleId, null, 1L, "v1");
+        store.flush();
+
+        AssetRule after = store.listRules(entryId).get(0);
+        // 这条是本次修复的核心：必须能区分"检查过没匹配"与"从未检查"，
+        // 否则界面只能给同一句提示，用户会反复点检查却毫无变化。
+        assertTrue(after.hasBeenChecked(), "检查过即使没匹配到也要留下痕迹");
+        assertFalse(after.hasCachedAsset(), "没有资产时不该说可下载");
+        assertNull(after.cachedAssetName());
+        assertNull(after.cachedAssetUrl());
+        assertEquals("v1", after.cachedReleaseTag());
+    }
+
+    @Test
+    @DisplayName("重新检查匹配失败时，应清掉上一次的旧资产")
+    void recheckClearsStaleAsset() throws Exception {
+        long entryId = store.insertEntry("o", "r", Entry.CHANNEL_LATEST, "o/r", false);
+        long ruleId = store.insertRule(entryId, "*.apk", null, AssetKind.COLLECTION,
+                "E:\\APK", null, 1, false, null);
+        store.flush();
+
+        var asset = new com.githubupdater.infra.github.ReleaseDto.Asset(
+                1L, "old.apk", 10L, null, "https://example.com/old.apk");
+        store.updateRuleAssetCache(ruleId, asset, 1L, "v1");
+        store.flush();
+        assertTrue(store.listRules(entryId).get(0).hasCachedAsset());
+
+        // 新版本里删掉了这个资产
+        store.updateRuleAssetCache(ruleId, null, 2L, "v2");
+        store.flush();
+
+        AssetRule r = store.listRules(entryId).get(0);
+        // 不清的话，界面会拿上一次的 URL 去下一个已经不存在的文件
+        assertFalse(r.hasCachedAsset(), "旧的资产信息必须被清掉");
+        assertNull(r.cachedAssetUrl());
+        assertEquals("v2", r.cachedReleaseTag());
+    }
+
+    @Test
+    @DisplayName("v2 数据库应能迁移到 v3，旧规则视为从未检查")
+    void migratesFromV2() throws Exception {
+        store.close();
+        Files.deleteIfExists(tempDir.resolve("state.db"));
+        Files.deleteIfExists(tempDir.resolve("state.db-wal"));
+        Files.deleteIfExists(tempDir.resolve("state.db-shm"));
+
+        Path dbPath = tempDir.resolve("state.db");
+        try (var conn = java.sql.DriverManager.getConnection(
+                "jdbc:sqlite:" + dbPath.toAbsolutePath())) {
+            try (var st = conn.createStatement()) {
+                st.execute("PRAGMA foreign_keys = ON");
+                for (String sql : Migrations.ALL.get(0).statements()) {
+                    st.execute(sql);
+                }
+                for (String sql : Migrations.ALL.get(1).statements()) {
+                    st.execute(sql);
+                }
+                st.execute("INSERT INTO app_meta(key, value) VALUES('schemaVersion', '2')");
+                st.execute("INSERT INTO entry(owner, repo, channel, display_name, is_private, "
+                        + "created_at) VALUES('o','r','latest','o/r',0, 111)");
+                st.execute("INSERT INTO asset_rule(entry_id, include_glob, kind, target_dir, "
+                        + "created_at) VALUES(1,'*.apk','COLLECTION','E:\\APK', 222)");
+            }
+        }
+
+        store = SqliteStore.open(tempDir);
+
+        assertEquals(String.valueOf(Migrations.LATEST_VERSION),
+                store.getMeta("schemaVersion").orElseThrow());
+        var rules = store.listRules(store.listEntries().get(0).id());
+        assertEquals(1, rules.size(), "迁移不应丢数据");
+        AssetRule r = rules.get(0);
+        assertEquals("*.apk", r.includeGlob());
+        // 旧数据在 v3 新列上全是 NULL，语义正好是"从未检查"
+        assertFalse(r.hasBeenChecked());
+        assertFalse(r.hasCachedAsset());
+    }
 }

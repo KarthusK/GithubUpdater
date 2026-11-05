@@ -322,6 +322,56 @@ public final class SqliteStore implements AutoCloseable {
         });
     }
 
+    /**
+     * 记录一次检查后该规则匹配到的资产。
+     *
+     * <p>这是「下载」按钮的数据来源：前端不再为了拿 assetName/downloadUrl
+     * 去触发一次 checkOne（那会白扣一次配额，而且刷新页面后就没了）。
+     *
+     * @param ruleId      规则
+     * @param asset       匹配到的资产；为 null 表示"检查过了但没匹配到"——
+     *                    此时仍要写 cached_at，否则无法与"从未检查"区分
+     * @param releaseId   所属 release id
+     * @param releaseTag  所属 release tag
+     */
+    public void updateRuleAssetCache(long ruleId, com.githubupdater.infra.github.ReleaseDto.Asset asset,
+                                     Long releaseId, String releaseTag) {
+        writer.submit(() -> {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "UPDATE asset_rule SET cached_asset_name = ?, cached_asset_id = ?, " +
+                    "cached_asset_size = ?, cached_asset_digest = ?, cached_asset_url = ?, " +
+                    "cached_release_id = ?, cached_release_tag = ?, cached_at = ? WHERE id = ?")) {
+                long now = System.currentTimeMillis();
+                if (asset == null) {
+                    // 检查过了但没有匹配：清空资产列，但保留 cached_at。
+                    // 保留时间戳是刻意的——它表达"检查过"，与从未检查是两件事。
+                    ps.setString(1, null);
+                    ps.setNull(2, java.sql.Types.INTEGER);
+                    ps.setNull(3, java.sql.Types.INTEGER);
+                    ps.setString(4, null);
+                    ps.setString(5, null);
+                } else {
+                    ps.setString(1, asset.name());
+                    ps.setLong(2, asset.id());
+                    ps.setLong(3, asset.size());
+                    ps.setString(4, asset.digest());
+                    ps.setString(5, asset.browserDownloadUrl());
+                }
+                if (releaseId == null) {
+                    ps.setNull(6, java.sql.Types.INTEGER);
+                } else {
+                    ps.setLong(6, releaseId);
+                }
+                ps.setString(7, releaseTag);
+                ps.setLong(8, now);
+                ps.setLong(9, ruleId);
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                throw new IllegalStateException("更新规则资产缓存失败", e);
+            }
+        });
+    }
+
     public void deleteEntry(long entryId) {
         writer.submit(() -> {
             try (PreparedStatement ps = conn.prepareStatement("DELETE FROM entry WHERE id = ?")) {
@@ -335,11 +385,16 @@ public final class SqliteStore implements AutoCloseable {
 
     // ──────────────────────────── 规则 ────────────────────────────
 
+    /** 规则的完整列清单。新增列时必须同步这里，否则 mapRule 会读不到。 */
+    private static final String RULE_COLUMNS =
+            "id, entry_id, include_glob, exclude_glob, kind, target_dir, " +
+            "file_name_tpl, keep_versions, auto_apply, after_apply_cmd, enabled, created_at, " +
+            "cached_asset_name, cached_asset_id, cached_asset_size, cached_asset_digest, " +
+            "cached_asset_url, cached_release_id, cached_release_tag, cached_at";
+
     public List<AssetRule> listRules(long entryId) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(
-                "SELECT id, entry_id, include_glob, exclude_glob, kind, target_dir, " +
-                "file_name_tpl, keep_versions, auto_apply, after_apply_cmd, enabled, created_at " +
-                "FROM asset_rule WHERE entry_id = ? ORDER BY created_at")) {
+                "SELECT " + RULE_COLUMNS + " FROM asset_rule WHERE entry_id = ? ORDER BY created_at")) {
             ps.setLong(1, entryId);
             try (ResultSet rs = ps.executeQuery()) {
                 List<AssetRule> list = new ArrayList<>();
@@ -817,8 +872,28 @@ public final class SqliteStore implements AutoCloseable {
                 rs.getInt("auto_apply") != 0,
                 rs.getString("after_apply_cmd"),
                 rs.getInt("enabled") != 0,
-                rs.getLong("created_at")
+                rs.getLong("created_at"),
+                rs.getString("cached_asset_name"),
+                nullableLong(rs, "cached_asset_id"),
+                nullableLong(rs, "cached_asset_size"),
+                rs.getString("cached_asset_digest"),
+                rs.getString("cached_asset_url"),
+                nullableLong(rs, "cached_release_id"),
+                rs.getString("cached_release_tag"),
+                nullableLong(rs, "cached_at")
         );
+    }
+
+    /**
+     * 读可空的整型列。
+     *
+     * <p>不能用 {@code rs.getLong()} 然后判 0：0 是合法值（虽然这里不会出现），
+     * 而且 SQL NULL 与 0 在语义上必须分开——{@code cached_at} 为 NULL 表示
+     * "从未检查"，为 0 则表示"检查发生在 1970 年"，两者不能用同一个值表达。
+     */
+    private static Long nullableLong(ResultSet rs, String column) throws SQLException {
+        long v = rs.getLong(column);
+        return rs.wasNull() ? null : v;
     }
 
     private static FileBackup mapBackup(ResultSet rs) throws SQLException {

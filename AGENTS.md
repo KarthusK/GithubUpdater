@@ -6,7 +6,7 @@ GithubUpdater：Windows 上的 GitHub 软件版本跟踪与下载工具。常驻
 
 **已实测通过的门槛**：**打包产物空载 77.2MB、跑完完整流程后稳态 119.6MB**。**阈值 150MB**（2026-11-02 由 120MB 放宽，见 [`docs/07-验收与风险.md`](docs/07-验收与风险.md) 的变更记录）。
 
-**测试**：`mvn test` → **168 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
+**测试**：`mvn test` → **172 个单元测试全部通过**；前端用 `build/verify-ui.ps1`（Chrome DevTools Protocol）端到端验证。
 
 **发布产物**：`build/GithubUpdater-0.1.0-win-x64.zip`，**59.5 MB**，解压即用，无需安装 Java。
 
@@ -55,7 +55,7 @@ mvn -v                              # 自检：必须显示 Maven 3.10.0 + Java 
 .\run.ps1 -Minimized                # 静默启动（不自动开浏览器）
 
 mvn -DskipTests package             # 编译 + 打包 → target/github-updater.jar
-mvn test                            # 跑全部单元测试（当前 168 个）
+mvn test                            # 跑全部单元测试（当前 172 个）
 mvn test -Dtest=AssetMatcherTest    # 跑单个测试类
 
 pwsh build/run-dev.ps1              # 启动 daemon（run.ps1 用等价参数，二选一）
@@ -242,6 +242,14 @@ pwsh build/package.ps1 -Zip         # 追加生成发布用 zip
 - **验证中间人场景不要动系统 hosts**：用 `-Djdk.net.hosts.file=<临时文件>` 把 `api.github.com` 指到本机自签 HTTPS 服务即可，只影响该测试进程。实测这套办法能完整复现"检查失败 → 配 CA → 检查成功 → 关掉代理仍成功"的全链路。
 - **检查失败也要更新 `last_checked_at` 并把原因落库**：只写时间不写原因，用户刷新后只剩一条没有原因的失败；只写原因不写时间，界面会显示"从未检查"却挂着失败信息，自相矛盾。三列一起写才自洽。
 - **「检查失败」不能直接等同于「被中间人劫持」**：断网、404、限流同样会失败。界面显示中间人横幅的**唯一判据**是 `lastTlsIssuer` 非空，误报会让人去关一堆正常软件，比不提示更糟。
+
+### 检查与下载的数据契约
+
+- **「下载」按钮的数据必须来自规则缓存，不能靠"先调一次检查"**：曾经 `onDownload` 先调 `checkOne` 再取 `r.downloadUrl`，但 `CheckOutcome.matchedAssets` 是 `List<String>`（只有文件名），URL / assetId / size / digest 在检查阶段就被 `.map(Asset::name)` 丢掉了，`createTask` 必然 400。**这个按钮在修好之前从未工作过**，而报错文案（"assetName 与 downloadUrl 不能为空"）指向的是后端校验，很容易被误判成配置问题。
+- **资产缓存到 `asset_rule`，不是 `entry`**：一个条目下多条规则会匹配到不同资产，按条目整块存会让"下载第一条规则"取到别人的文件——正是 `AssetMatcher` 一直要防的装错文件事故。`matchedAssets` 必须带 `ruleId`。
+- **`cached_at` 非空但资产列为 NULL ≠ 从未检查**：前者是"检查过但没匹配到"，该提示调整 glob；后者该提示去点检查。用资产名是否为空代替 `cached_at` 会让两种状态混为一谈，用户会反复点检查却毫无变化。重新检查匹配失败时**必须清空旧资产**，否则会拿上次的 URL 去下一个已不存在的文件。
+- **不要为了"省一次检查"改成后端在 `createTask` 里临时解析资产**（评估过并否决）：那样下载的版本可能与用户刚才检查到的 release 不一致（作者中途发新版）、要在 `asset_rule` 之外二次匹配（引入"检查时唯一、下载时歧义"）、还会把网络调用拖进 `maxThreads=12` 的 Jetty 线程池。**先检查再下载**是正确的语义，不是缺陷。
+- **`matchAssetsForTag` 以前每次 304 都额外发一次 `listReleases`**：而匿名请求命中 304 照样扣配额，"省配额"的初衷完全落空。加了规则缓存后应先查缓存，未命中才补拉。
 
 ### 前端
 

@@ -381,26 +381,38 @@ function RuleItem({ rule, tasks, entryTag, onChanged }) {
     }, [showBackups, loadBackups]);
 
     const onDownload = useCallback(async () => {
+        // 直接用规则上已缓存的资产，**不再触发 checkOne**。
+        //
+        // 原来这里会先调一次检查再取资产，有两个致命问题：
+        //   1. CheckOutcome 只带了文件名，downloadUrl / digest / assetId
+        //      在检查阶段就被丢掉了，createTask 必然 400
+        //   2. 每点一次下载白扣一次 API 配额，还顺带改写了 last_checked_at
+        //
+        // 资产现在由后端在检查时按规则落库，刷新页面、重启进程后都还在，
+        // 下载是纯本地读，消耗 0 配额。
+        const a = rule.cachedAsset;
+
+        // 两种"没有资产"要分开说，否则用户只能反复点检查却看不到变化
+        if (!a) {
+            toast('这条规则还没有检查过，请先点「检查」', 'warn');
+            return;
+        }
+        if (!a.name || !a.downloadUrl) {
+            toast('上次检查时这条规则没有匹配到资产，请调整 glob 或重新检查', 'warn');
+            return;
+        }
+
         setBusy(true);
         try {
-            // 需要 asset 的完整信息才能建任务。这里用当前条目已检查到的 tag。
-            // 真实资产信息应由后端从最近的 release 缓存里取，但当前设计是
-            // 检查时已拿到，前端从 entries 里读不到，所以走一次轻量的 check。
-            const r = await api.checkOne(rule.entryId);
-            const asset = (r.matchedAssets || [])[0];
-            if (!asset) {
-                toast('该规则在最新版本里没有匹配到资产', 'warn');
-                return;
-            }
             await api.createTask({
                 assetRuleId: rule.id,
-                assetName: asset,
-                downloadUrl: r.downloadUrl || '',
-                releaseId: r.releaseId || 0,
-                releaseTag: r.tag || entryTag || 'unknown',
-                assetId: r.assetId || 0,
-                expectedSize: r.expectedSize || null,
-                expectedDigest: r.expectedDigest || null,
+                assetName: a.name,
+                downloadUrl: a.downloadUrl,
+                releaseId: a.releaseId || 0,
+                releaseTag: a.releaseTag || entryTag || 'unknown',
+                assetId: a.assetId || 0,
+                expectedSize: a.size || null,
+                expectedDigest: a.digest || null,
             });
             toast('已加入下载队列');
         } catch (e) {
